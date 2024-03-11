@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
@@ -1142,6 +1143,73 @@ func cleanup(yamlConfig *config.Config) {
 	}
 }
 
+func parseCommandLineParameters(yamlConfig *config.Config) {
+	log.Print("parse_command_line_parameters:: Enter()")
+
+	var cfUsername string
+	var cfPassword string
+	var sysdigAPIToken string
+	flag.StringVar(&cfUsername, "u", "", "CF Username")
+	flag.StringVar(&cfUsername, "cf-username", "", "CF Username (long-form)")
+
+	flag.StringVar(&cfPassword, "p", "", "CF Password")
+	flag.StringVar(&cfPassword, "cf-password", "", "CF Password (long-form)")
+
+	flag.StringVar(&sysdigAPIToken, "a", "", "Sysdig API Token")
+	flag.StringVar(&sysdigAPIToken, "sysdig-api-token", "", "Sysdig API Token (long-form)")
+
+	// Parse the flags
+	flag.Parse()
+
+	if cfUsername != "" {
+		yamlConfig.Config.CFUsername = cfUsername
+		log.Print("parse_command_line_parameters:: Overriding CFUsername with command line")
+	}
+
+	if cfPassword != "" {
+		yamlConfig.Config.CFPassword = cfPassword
+		log.Print("parse_command_line_parameters:: Overriding CFPassword with command line")
+	}
+
+	if sysdigAPIToken != "" {
+		yamlConfig.Config.SysdigAPIToken = sysdigAPIToken
+		log.Print("parse_command_line_parameters:: Overriding sysdigAPIToken with command line")
+	}
+
+	log.Print("parse_command_line_parameters:: Exit()")
+}
+
+func parseEnvironmentVariables(yamlConfig *config.Config) {
+	log.Print("parseEnvironmentVariables:: Enter()")
+
+	var cfUsername string
+	var cfPassword string
+	var sysdigAPIToken string
+
+	cfUsername = os.Getenv("CF_USERNAME")
+	cfPassword = os.Getenv("CF_PASSWORD")
+	sysdigAPIToken = os.Getenv("SYSDIG_API_TOKEN")
+
+	// Parse the fla
+
+	if cfUsername != "" {
+		yamlConfig.Config.CFUsername = cfUsername
+		log.Print("parseEnvironmentVariables:: Overriding CFUsername with command line")
+	}
+
+	if cfPassword != "" {
+		yamlConfig.Config.CFPassword = cfPassword
+		log.Print("parseEnvironmentVariables:: Overriding CFPassword with command line")
+	}
+
+	if sysdigAPIToken != "" {
+		yamlConfig.Config.SysdigAPIToken = sysdigAPIToken
+		log.Print("parseEnvironmentVariables:: Overriding sysdigAPIToken with command line")
+	}
+
+	log.Print("parseEnvironmentVariables:: Exit()")
+}
+
 func main() {
 	// Setting up signal catching
 	sigs := make(chan os.Signal, 1)
@@ -1150,15 +1218,17 @@ func main() {
 	// Register the signals you want to catch
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
-	log.Print("main:: Sysdig-Tanzu-Scanner v1.2.1-BW Enter()")
+	log.Print("main:: Sysdig-Tanzu-Scanner v1.2.2-BW Enter()")
 
-	// Log an info message.
-	log.Println("Attempting to parse yamlConfig file")
-
+	// Parse yaml config file
 	yamlConfig, err := parseConfigFile()
 	if err != nil {
 		log.Fatalf("main:: Could not parse yamlConfig file.  Error: %v", err)
 	}
+
+	// Parse command line parameters and override config if required
+	parseCommandLineParameters(&yamlConfig)
+	parseEnvironmentVariables(&yamlConfig)
 
 	defer func() {
 		cleanup(&yamlConfig)
