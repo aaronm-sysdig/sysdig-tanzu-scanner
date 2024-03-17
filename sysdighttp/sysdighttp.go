@@ -5,8 +5,8 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -41,13 +41,13 @@ func DefaultSysdigRequestConfig() SysdigRequestConfig {
 	}
 }
 
+//goland:noinspection GoBoolExpressions
 func SysdigRequest(SysdigRequest SysdigRequestConfig) (*http.Response, error) {
 	retries := 0
 	// Initialize the request body as an io.Reader
 	var requestBody io.Reader
 
 	var resp *http.Response
-	var err error
 
 	for retries <= SysdigRequest.MaxRetries {
 		// Check the Content-Type to determine how to encode the request body
@@ -127,13 +127,13 @@ func SysdigRequest(SysdigRequest SysdigRequestConfig) (*http.Response, error) {
 		}
 
 		log.Printf("SysdigRequest:: Error: %v. Retrying in %d seconds...", err, SysdigRequest.BaseDelay)
-		log.Printf("SysdigRequest:: StatusCode: '%d', Retry: %d, Sleeping for %d seconds", resp.StatusCode, retries, SysdigRequest.BaseDelay)
+		log.Printf("SysdigRequest:: StatusCode: '%d', Retry: %d/%d, Sleeping for %d seconds", resp.StatusCode, retries, SysdigRequest.MaxRetries, SysdigRequest.BaseDelay)
 		time.Sleep(time.Duration(SysdigRequest.BaseDelay) * time.Second)
 		retries++
 	}
 
 	log.Printf("SysdigRequest:: Failed to fetch data from %s after %d retries.", SysdigRequest.URL, SysdigRequest.MaxRetries)
-	log.Printf("SysdigRequest:: Error making request to %s: %v", SysdigRequest.URL, err)
+	log.Printf("SysdigRequest:: Error making request to %s", SysdigRequest.URL)
 
 	// Manually create an HTTP response with a 503 status code
 	resp = &http.Response{

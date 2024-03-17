@@ -15,6 +15,7 @@ import (
 	"golang.org/x/text/message"
 	"gopkg.in/yaml.v2"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -33,13 +34,14 @@ import (
 	"sysdig-tanzu-scanner/types/oci"
 	"sysdig-tanzu-scanner/types/organizationpayload"
 	ResultsJSON "sysdig-tanzu-scanner/types/results"
+	"sysdig-tanzu-scanner/types/results-old"
 	"sysdig-tanzu-scanner/types/runningapps"
 	"sysdig-tanzu-scanner/types/spacepayload"
 	"time"
 )
 
 func parseConfigFile() (config.Config, error) {
-	log.Print("parseConfigFile:: Enter()")
+	log.Debug("parseConfigFile:: Enter()")
 
 	tanzuConfig := config.Config{}
 
@@ -56,12 +58,11 @@ func parseConfigFile() (config.Config, error) {
 	if tanzuConfig.Settings.LogLevel == "" ||
 		tanzuConfig.Config.CFAuthEndpoint == "" ||
 		tanzuConfig.Config.CFAPIEndpoint == "" ||
-		tanzuConfig.Config.SysdigCliCommand == "" ||
 		len(tanzuConfig.Stacks) == 0 {
 		return config.Config{}, errors.New("config validation failed: missing required fields")
 	}
 
-	log.Print("parseConfigFile:: Exit()")
+	log.Debug("parseConfigFile:: Exit()")
 	return tanzuConfig, nil
 }
 
@@ -69,7 +70,7 @@ func decodeConfigCredentials(config config.Config, workerResult *executionresult
 	if workerResult != nil {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("decodeConfigCredentials:: Enter()"))
 	} else {
-		log.Print("decodeConfigCredentials:: Enter()")
+		log.Debug("decodeConfigCredentials:: Enter()")
 	}
 
 	// Decode the base64 encoded username
@@ -94,7 +95,7 @@ func decodeConfigCredentials(config config.Config, workerResult *executionresult
 	if workerResult != nil {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("decodeConfigCredentials:: Exit()"))
 	} else {
-		log.Print("decodeConfigCredentials:: Exit()")
+		log.Debug("decodeConfigCredentials:: Exit()")
 	}
 	return &tanzuCredentials, nil
 }
@@ -108,7 +109,13 @@ func decodeConfigCredentials(config config.Config, workerResult *executionresult
 	}
 }*/
 
-func getAccessToken(config *config.Config, creds *credentials.Credentials) (*oauthtoken.OAuthToken, error) {
+func getAccessToken(config *config.Config, creds *credentials.Credentials, workerResult *executionresults.WorkerResult) (oAuthToken *oauthtoken.OAuthToken, err error) {
+	if workerResult == nil {
+		log.Print("getAccessToken:: Enter()")
+	} else {
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("getAccessToken:: Enter()"))
+	}
+
 	configLogin := sysdighttp.DefaultSysdigRequestConfig()
 	configLogin.Method = "POST"
 	configLogin.URL = config.Config.CFAuthEndpoint
@@ -123,18 +130,36 @@ func getAccessToken(config *config.Config, creds *credentials.Credentials) (*oau
 		"grant_type": "password",
 	}
 
-	objResponse, err := sysdighttp.SysdigRequest(configLogin)
-	var loginBody oauthtoken.OAuthToken
-	err = sysdighttp.ResponseBodyToJson(objResponse, &loginBody)
+	var objResponse *http.Response
+	if workerResult == nil {
+		log.Printf("getAccessToken:: Executing URL: %s", configLogin.URL)
+	} else {
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getAccessToken:: Executing URL: %s", configLogin.URL))
+	}
+
+	if objResponse, err = sysdighttp.SysdigRequest(configLogin); err != nil {
+		log.Fatalf("getAccessToken:: Failed to execute query to get token. Error: %v", err)
+	}
+
+	// Initialize oAuthToken before unmarshalling the JSON into it, so we have a valid construct to use
+	oAuthToken = &oauthtoken.OAuthToken{}
+
+	err = sysdighttp.ResponseBodyToJson(objResponse, oAuthToken)
 	if err != nil {
-		log.Fatalf("ResponseBodyToJson error: %v", err)
+		log.Fatalf("getAccessToken:: ResponseBodyToJson error: %v", err)
 	}
 	defer objResponse.Body.Close()
 
 	// Calculate the expiry time based on the current time and expires_in value
-	loginBody.ExpiryTime = time.Now().Add(time.Second * time.Duration(loginBody.ExpiresIn))
+	oAuthToken.ExpiryTime = time.Now().Add(time.Second * time.Duration(oAuthToken.ExpiresIn))
 
-	return &loginBody, nil
+	if workerResult == nil {
+		log.Print("getAccessToken:: Exit()")
+	} else {
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("getAccessToken:: Exit()"))
+	}
+
+	return oAuthToken, nil
 }
 
 /*
@@ -184,12 +209,12 @@ func getOrganizations(yamlConfig *config.Config, authToken *oauthtoken.OAuthToke
 }*/
 
 func generateRunningApps(yamlConfig *config.Config, authToken *oauthtoken.OAuthToken, creds *credentials.Credentials) ([]runningapps.Resource, error) {
-	log.Print("generateRunningApps:: Enter()")
+	log.Debug("generateRunningApps:: Enter()")
 	var err error
 
 	if !authToken.IsValid() {
 		log.Print("getAccessToken:: Enter()")
-		authToken, err = getAccessToken(yamlConfig, creds)
+		authToken, err = getAccessToken(yamlConfig, creds, nil)
 		log.Print("getAccessToken:: Exit()")
 
 		if err != nil {
@@ -202,6 +227,8 @@ func generateRunningApps(yamlConfig *config.Config, authToken *oauthtoken.OAuthT
 	configOrgApps.Headers = map[string]string{
 		"authorization": "bearer " + authToken.AccessToken,
 	}
+
+	log.Printf("generateRunningApps:: Executing URL: %s", configOrgApps.URL)
 	objResponse, err := sysdighttp.SysdigRequest(configOrgApps) // Corrected variable name
 	if err != nil {
 		return nil, fmt.Errorf("generateRunningApps:: Failed to get running apps. Error: %s", err)
@@ -212,7 +239,7 @@ func generateRunningApps(yamlConfig *config.Config, authToken *oauthtoken.OAuthT
 	if err != nil {
 		return nil, fmt.Errorf("generateRunningApps:: ResponseBodyToJson error: %v", err)
 	}
-	log.Print("generateRunningApps:: Exit()")
+	log.Debug("generateRunningApps:: Exit()")
 	return jsonRunningAppsComplete.Resources, nil
 
 	/*
@@ -248,6 +275,11 @@ func getSpace(appName string, spaceURL string, oAuthToken *oauthtoken.OAuthToken
 	configSpace.Headers = map[string]string{
 		"authorization": "bearer " + oAuthToken.AccessToken,
 	}
+	if workerResult == nil {
+		log.Printf("getSpaceName:: Executing URL: %s", configSpace.URL)
+	} else {
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getSpaceName:: Executing URL: %s", configSpace.URL))
+	}
 	objSpaceResponse, err := sysdighttp.SysdigRequest(configSpace)
 	if err != nil {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getSpaceName:: Failed to exequte query to get space for %v.  Error: %v", appName, err))
@@ -280,6 +312,11 @@ func getDeployedRevision(appName string, deployedRevisionURL string, oAuthToken 
 	configDeployedRevision.Headers = map[string]string{
 		"authorization": "bearer " + oAuthToken.AccessToken,
 	}
+	if workerResult == nil {
+		log.Printf("getDeployedRevision:: Executing URL: %s", configDeployedRevision.URL)
+	} else {
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getDeployedRevision:: Executing URL: %s", configDeployedRevision.URL))
+	}
 	objDeployedRevisionResponse, err := sysdighttp.SysdigRequest(configDeployedRevision)
 	if err != nil {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getDeployedRevision:: Failed to exequte query to get deployed revision for %v.  Error: %v", appName, err))
@@ -302,14 +339,19 @@ func getDeployedRevision(appName string, deployedRevisionURL string, oAuthToken 
 func getOrganization(appName string, organizationURL string, oAuthToken *oauthtoken.OAuthToken, workerResult *executionresults.WorkerResult) (jsonOrganization *organizationpayload.OrganizationPayload, err error) {
 	workerResult.Logs = append(workerResult.Logs, "getOrganization:: Enter()")
 
-	configSpace := sysdighttp.DefaultSysdigRequestConfig()
-	configSpace.URL = organizationURL
-	configSpace.Method = "GET"
-	configSpace.Verify = false
-	configSpace.Headers = map[string]string{
+	configOrganization := sysdighttp.DefaultSysdigRequestConfig()
+	configOrganization.URL = organizationURL
+	configOrganization.Method = "GET"
+	configOrganization.Verify = false
+	configOrganization.Headers = map[string]string{
 		"authorization": "bearer " + oAuthToken.AccessToken,
 	}
-	objOrganizationResponse, err := sysdighttp.SysdigRequest(configSpace)
+	if workerResult == nil {
+		log.Printf("getOrganization:: Executing URL: %s", configOrganization.URL)
+	} else {
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getOrganization:: Executing URL: %s", configOrganization.URL))
+	}
+	objOrganizationResponse, err := sysdighttp.SysdigRequest(configOrganization)
 	if err != nil {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getOrganization:: Failed to exequte query to get organization for %v.  Error: %v", appName, err))
 		return nil, err
@@ -346,6 +388,11 @@ func downloadDroplet(app runningapps.Resource, dropletFilePath string, authToken
 	}
 	configCurrentDroplet.Verify = false
 
+	if workerResult == nil {
+		log.Printf("downloadDroplet:: Executing URL: %s", configCurrentDroplet.URL)
+	} else {
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("downloadDroplet:: Executing URL: %s", configCurrentDroplet.URL))
+	}
 	objCurrentDropletResponse, err := sysdighttp.SysdigRequest(configCurrentDroplet)
 	if err != nil {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("downloadDroplet:: Failed to get droplet info: %v", err))
@@ -369,6 +416,11 @@ func downloadDroplet(app runningapps.Resource, dropletFilePath string, authToken
 		"authorization": "bearer " + authToken.AccessToken,
 	}
 	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("downloadDroplet:: Downloading droplet for app: %s from:  %s", app.Name, jsonCurrentDroplet.Links["download"].Href))
+	if workerResult == nil {
+		log.Printf("downloadDroplet:: Executing URL: %s", configDownload.URL)
+	} else {
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("downloadDroplet:: Executing URL: %s", configDownload.URL))
+	}
 	objDownloadDroplet, err := sysdighttp.SysdigRequest(configDownload)
 	if err != nil {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("downloadDroplet:: Failed to download droplet for app: %s. Error: : %v", app.Name, err))
@@ -745,13 +797,11 @@ func getCurrentDir() string {
 	return dir
 }
 
-func executeAndLogSysdigScanner(appResource runningapps.Resource, yamlConfig *config.Config, organizationResource organizationpayload.OrganizationPayload, spaceResource spacepayload.SpacePayload, sysdigCLICommand string, sysdigAPIToken string, workerResult *executionresults.WorkerResult) error {
+func executeAndLogSysdigScanner(appResource runningapps.Resource, yamlConfig *config.Config, organizationResource organizationpayload.OrganizationPayload, spaceResource spacepayload.SpacePayload, sysdigAPIToken string, workerResult *executionresults.WorkerResult) error {
 
 	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("executeAndLogSysdigScanner:: Enter()"))
 
 	ociDirPath := fmt.Sprintf("file://%s/oci/%s/%s/%s", getCurrentDir(), organizationResource.Name, spaceResource.Name, appResource.Name)
-	// Split the configuration command string into arguments
-	args := strings.Fields(sysdigCLICommand)
 
 	// Append the OCI directory path to the arguments
 	filenameUUID := uuid.New()
@@ -772,11 +822,26 @@ func executeAndLogSysdigScanner(appResource runningapps.Resource, yamlConfig *co
 	workerResult.ScanResultsFilename = scanResultsFilename
 	workerResult.ScanResultsLogFilename = scanLogFilename
 
-	args = append(args, fmt.Sprintf("--policy=%s", yamlConfig.Config.SysdigPolicy))
-	args = append(args, fmt.Sprintf("--json-scan-result=%s", scanResultsFilename))
-	args = append(args, fmt.Sprintf("--logfile=%s", scanLogFilename))
-	args = append(args, fmt.Sprintf("--apiurl=%s", yamlConfig.Config.SysdigAPIEndpoint))
+	// Split the configuration command string into arguments
+	var args []string
+	args = append(args, "./sysdig-cli-scanner")
+	args = append(args, "--full-vulns-table")
+	args = append(args, "--loglevel=debug")
+	if yamlConfig.Settings.Standalone {
+		args = append(args, "--standalone")
+		args = append(args, "--no-cache")
+		args = append(args, fmt.Sprintf("--output-json=%s", scanResultsFilename))
+		args = append(args, fmt.Sprintf("--logfile=%s", scanLogFilename))
+	} else {
+		args = append(args, "--skipupload")
+		args = append(args, "--no-cache")
+		args = append(args, "--offline-analyzer")
+		args = append(args, fmt.Sprintf("--policy=%s", yamlConfig.Config.SysdigPolicy))
+		args = append(args, fmt.Sprintf("--json-scan-result=%s", scanResultsFilename))
+		args = append(args, fmt.Sprintf("--logfile=%s", scanLogFilename))
+		args = append(args, fmt.Sprintf("--apiurl=%s", yamlConfig.Config.SysdigAPIEndpoint))
 
+	}
 	args = append(args, ociDirPath)
 	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("executeAndLogSysdigScanner:: Executing: %v", args))
 
@@ -820,14 +885,9 @@ func executeAndLogSysdigScanner(appResource runningapps.Resource, yamlConfig *co
 				}
 			}
 		}
-	} else {
-		// Command executed successfully, exit code 0
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("executeAndLogSysdigScanner::Cmd executed successfully"))
-		return err
 	}
-
-	// Read in the Results file to our construct
-
+	// Command executed successfully, exit code 0
+	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("executeAndLogSysdigScanner::Cmd executed successfully"))
 	// Set the JSON file in structure
 	workerResult.RunningApp.ResultsFilename = scanResultsFilename
 	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("executeAndLogSysdigScanner:: Exit()"))
@@ -865,6 +925,162 @@ func writeCSV(filename string, data *[][]string) (err error) {
 	return writer.Error()
 }
 
+func generateCSVDataOnline(yamlConfig *config.Config, result *ResultsJSON.ScanResult, executionResult *executionresults.WorkerResult) (csvData [][]string, err error) {
+	// Search for the 'BankWest Tanzu Policy' in PolicyEvaluations
+	for _, policyEval := range result.Result.PolicyEvaluations {
+		if policyEval.Identifier == yamlConfig.Config.SysdigPolicy {
+			for _, bundle := range policyEval.Bundles {
+				for _, rule := range bundle.Rules {
+					for _, failure := range rule.Failures {
+						// Assuming pkgIndex is within the bounds of the Packages array
+						if failure.PkgIndex >= 0 && failure.PkgIndex < len(result.Result.Packages) {
+							pkg := result.Result.Packages[failure.PkgIndex]
+							// Assuming vulnInPkgIndex is within the bounds of the Vulns array
+							if failure.VulnInPkgIndex >= 0 && failure.VulnInPkgIndex < len(pkg.Vulns) {
+								vuln := pkg.Vulns[failure.VulnInPkgIndex]
+
+								// Generate a CVE link if possible
+								var cveLink string
+								if strings.HasPrefix(strings.ToUpper(vuln.Name), "CVE") {
+									cveLink = fmt.Sprintf("https: //nvd.nist.gov/vuln/detail/%s", vuln.Name)
+								}
+
+								// Generate Suggested fix / fixed in version
+								var strFixedVersion string
+								if pkg.SuggestedFix != "" && vuln.FixedInVersion != "" {
+									strFixedVersion = pkg.SuggestedFix
+								} else {
+									strFixedVersion = vuln.FixedInVersion
+								}
+
+								csvData = append(csvData, []string{
+									strings.TrimSuffix(strings.TrimPrefix(executionResult.DropletFilename, "droplets/"), ".tar.gz"),
+									fmt.Sprintf("%d", executionResult.DeployedRevisionVersion),
+									executionResult.DropletSHA256Hash,
+									vuln.Severity.Value,
+									vuln.Name,
+									pkg.Name,
+									pkg.Version,
+									pkg.Path,
+									strFixedVersion,
+									vuln.SolutionDate,
+									cveLink,
+									executionResult.RunningApp.Organization.Name,
+									executionResult.RunningApp.Space.Name,
+									"",
+									time.Now().Format("02/01/2006"),
+									"BankWest",
+									"",
+									"",
+									"",
+								})
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return csvData, nil
+}
+
+func contains(s []string, str string) bool {
+	for _, v := range s {
+		if v == str {
+			return true
+		}
+	}
+	return false
+}
+
+func generateCSVDataStandalone(yamlConfig *config.Config, result *ResultsJSONOld.ScanResult, executionResult *executionresults.WorkerResult) (csvData [][]string, err error) {
+
+	// Build list of severities to check vulns against (>=)
+	var includeSeverities []string
+	if yamlConfig.Settings.StandaloneSeverity != "" {
+		severity := strings.ToUpper(yamlConfig.Settings.StandaloneSeverity)
+
+		switch severity {
+		case "CRITICAL":
+			includeSeverities = []string{"CRITICAL"}
+		case "HIGH":
+			includeSeverities = []string{"CRITICAL", "HIGH"}
+		case "MEDIUM":
+			includeSeverities = []string{"CRITICAL", "HIGH", "MEDIUM"}
+		case "LOW":
+			includeSeverities = []string{"CRITICAL", "HIGH", "MEDIUM", "LOW"}
+		case "NEGLIGIBLE":
+			includeSeverities = []string{"CRITICAL", "HIGH", "MEDIUM", "LOW", "NEGLIGIBLE"}
+		}
+	}
+
+	for _, pkg := range result.Packages.List {
+		for _, vuln := range pkg.Vulnerabilities {
+
+			// Check if we are to include this vuln based off 'policy' parameters, else skip
+			if !contains(includeSeverities, strings.ToUpper(vuln.Severity.Label)) {
+				continue
+			}
+
+			// Check if vuln has fix, if we need a fix date and there is not a solution date, continue with next vuln
+			if yamlConfig.Settings.StandaloneHasFix && vuln.SolutionDate == "" {
+				continue
+			}
+
+			// check for vuln days, ensure it's within our range
+			// Build solution date
+			var solutionDate string
+			var parsedSolutionDate time.Time
+			if vuln.SolutionDate != "" {
+				if parsedSolutionDate, err = time.Parse(time.RFC3339, vuln.SolutionDate); err != nil {
+					solutionDate = "dateParseError"
+				} else {
+					thresholdDate := time.Now().AddDate(0, 0, -yamlConfig.Settings.StandaloneDaysSinceFix)
+					if !parsedSolutionDate.Before(thresholdDate) {
+						continue // Solution date is older than the specified days ago, skip this vulnerability
+					}
+					solutionDate = parsedSolutionDate.Format("02/01/2006") // Format the date as "dd/mm/yyyy"
+				}
+			}
+
+			// Get URL for link
+			var cveLink string
+			if vuln.Severity.SourceUrl != "" {
+				cveLink = vuln.Severity.SourceUrl
+			} else {
+				if vuln.CvssScore.SourceUrl == "" {
+					cveLink = fmt.Sprintf("https: //nvd.nist.gov/vuln/detail/%s", vuln.Name)
+				} else {
+					cveLink = vuln.CvssScore.SourceUrl
+				}
+			}
+
+			csvData = append(csvData, []string{
+				strings.TrimSuffix(strings.TrimPrefix(executionResult.DropletFilename, "droplets/"), ".tar.gz"),
+				fmt.Sprintf("%d", executionResult.DeployedRevisionVersion),
+				executionResult.DropletSHA256Hash,
+				vuln.Severity.Label,
+				vuln.Name,
+				pkg.Name,
+				pkg.Version,
+				pkg.PackagePath,
+				pkg.SuggestedFix,
+				solutionDate,
+				cveLink,
+				executionResult.RunningApp.Organization.Name,
+				executionResult.RunningApp.Space.Name,
+				"",
+				time.Now().Format("02/01/2006"),
+				"BankWest",
+				"",
+				"",
+				"",
+			})
+		}
+	}
+	return csvData, nil
+}
+
 func extractAndWriteCSV(executionResults *[]executionresults.WorkerResult,
 	yamlConfig *config.Config) error {
 	log.Print("extractAndWriteCSV:: Enter()")
@@ -880,66 +1096,30 @@ func extractAndWriteCSV(executionResults *[]executionresults.WorkerResult,
 				continue
 			}
 
-			var result ResultsJSON.ScanResult
-			if err := json.Unmarshal(jsonData, &result); err != nil {
-				log.Printf("extractAndWriteCSV:: Error unmarshaling json for app: %s. ERROR: %v", executionResult.RunningApp.Name, err)
-				continue
-			}
-			// Search for the 'BankWest Tanzu Policy' in PolicyEvaluations
-			for _, policyEval := range result.Result.PolicyEvaluations {
-				if policyEval.Identifier == yamlConfig.Config.SysdigPolicy {
-					for _, bundle := range policyEval.Bundles {
-						for _, rule := range bundle.Rules {
-							for _, failure := range rule.Failures {
-								// Assuming pkgIndex is within the bounds of the Packages array
-								if failure.PkgIndex >= 0 && failure.PkgIndex < len(result.Result.Packages) {
-									pkg := result.Result.Packages[failure.PkgIndex]
-									// Assuming vulnInPkgIndex is within the bounds of the Vulns array
-									if failure.VulnInPkgIndex >= 0 && failure.VulnInPkgIndex < len(pkg.Vulns) {
-										vuln := pkg.Vulns[failure.VulnInPkgIndex]
+			var csvDataRow [][]string
 
-										// Generate a CVE link if possible
-										var cveLink string
-										if strings.HasPrefix(strings.ToUpper(vuln.Name), "CVE") {
-											cveLink = fmt.Sprintf("https: //nvd.nist.gov/vuln/detail/%s", vuln.Name)
-										}
-
-										// Generate Suggested fix / fixed in version
-										var strFixedVersion string
-										if pkg.SuggestedFix != "" && vuln.FixedInVersion != "" {
-											strFixedVersion = pkg.SuggestedFix
-										} else {
-											strFixedVersion = vuln.FixedInVersion
-										}
-
-										csvData = append(csvData, []string{
-											executionResult.DropletFilename,
-											fmt.Sprintf("%d", executionResult.DeployedRevisionVersion),
-											executionResult.DropletSHA256Hash,
-											vuln.Severity.Value,
-											vuln.Name,
-											pkg.Name,
-											pkg.Version,
-											pkg.Path,
-											strFixedVersion,
-											vuln.SolutionDate,
-											cveLink,
-											executionResult.RunningApp.Organization.Name,
-											executionResult.RunningApp.Space.Name,
-											"",
-											time.Now().Format("02/01/2006"),
-											"BankWest",
-											"",
-											"",
-											"",
-										})
-									}
-								}
-							}
-						}
-					}
+			if yamlConfig.Settings.Standalone {
+				var resultOld ResultsJSONOld.ScanResult
+				if err := json.Unmarshal(jsonData, &resultOld); err != nil {
+					log.Printf("extractAndWriteCSV:: Standalone: Error unmarshaling json for app: %s. ERROR: %v", executionResult.RunningApp.Name, err)
+					continue
 				}
+				csvDataRow, _ = generateCSVDataStandalone(yamlConfig, &resultOld, &executionResult)
+
+			} else {
+				var result ResultsJSON.ScanResult
+				if err := json.Unmarshal(jsonData, &result); err != nil {
+					log.Printf("extractAndWriteCSV:: Online: Error unmarshaling json for app: %s. ERROR: %v", executionResult.RunningApp.Name, err)
+					continue
+				}
+				csvDataRow, err = generateCSVDataOnline(yamlConfig, &result, &executionResult)
 			}
+
+			// Merge CSV data to existing data
+			for _, row := range csvDataRow {
+				csvData = append(csvData, row)
+			}
+
 		} else {
 			log.Printf("extractAndWriteCSV:: App: %s, completion unsuccessful, skipping", executionResult.RunningApp.Name)
 		}
@@ -1005,9 +1185,7 @@ func processApp(appResource runningapps.Resource, yamlConfig config.Config, thre
 
 	// Getting oAuthToken for thread
 	authCredentials, err := decodeConfigCredentials(yamlConfig, &workerResult)
-	workerResult.Logs = append(workerResult.Logs, "getAccessToken:: Enter()")
-	oAuthToken, err := getAccessToken(&yamlConfig, authCredentials)
-	workerResult.Logs = append(workerResult.Logs, "getAccessToken:: Exit()")
+	oAuthToken, err := getAccessToken(&yamlConfig, authCredentials, &workerResult)
 
 	if err != nil {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Error getting OAuth token: %v", err))
@@ -1075,7 +1253,7 @@ func processApp(appResource runningapps.Resource, yamlConfig config.Config, thre
 		return workerResult, err
 	}
 
-	err = executeAndLogSysdigScanner(appResource, &yamlConfig, *jsonOrganization, *jsonSpace, yamlConfig.Config.SysdigCliCommand, yamlConfig.Config.SysdigAPIToken, &workerResult)
+	err = executeAndLogSysdigScanner(appResource, &yamlConfig, *jsonOrganization, *jsonSpace, yamlConfig.Config.SysdigAPIToken, &workerResult)
 	if err != nil {
 		return workerResult, err
 	}
@@ -1209,6 +1387,124 @@ func parseEnvironmentVariables(yamlConfig *config.Config) {
 
 	log.Print("parseEnvironmentVariables:: Exit()")
 }
+func checkForCLIScanner() (err error) {
+	log.Debug("checkForCLIScanner:: Enter()")
+	presentWorkingDirectory, err := os.Getwd()
+	log.Debugf("checkForCLIScanner:: Checking for 'sysdig-cli-scanner' in %s", presentWorkingDirectory)
+	if _, err := os.Stat("sysdig-cli-scanner"); os.IsNotExist(err) {
+		if err != nil {
+			log.Debug("checkForCLIScanner:: Exit()")
+			return err
+		}
+		log.Debug("checkForCLIScanner:: Exit()")
+		return err
+	} else {
+		log.Debug("checkForCLIScanner:: Exit()")
+		return nil
+	}
+}
+
+func removeMainDB(yamlConfig *config.Config) (err error) {
+	log.Debug("removeMainDB:: Enter()")
+	if yamlConfig.Settings.AlwaysDownloadVulndb == true {
+		log.Print("removeMainDB:: Removing maindb due to force download as per config 'always_download_vulndb'")
+		if err = os.RemoveAll("main.db"); err != nil {
+			log.Debug("removeMainDB:: Exit()")
+			return err
+		}
+		if err = os.RemoveAll("main.db.meta.json"); err != nil {
+			log.Debug("removeMainDB:: Exit()")
+			return err
+		}
+	}
+	log.Debug("removeMainDB:: Exit()")
+	return err
+}
+
+func downloadMainDB(yamlConfig *config.Config) (statusCode int, err error) {
+	log.Debug("downloadMainDB:: Enter()")
+
+	//Remove old scan-logs output, will continue anyway
+	if err = os.Remove("scan-logs"); err != nil {
+		log.Printf("downloadMainDB:: Failed to delete scan-logs file, continuing anyway. Error: %v", err)
+	}
+
+	if _, err := os.Stat("main.db"); os.IsNotExist(err) {
+		log.Printf("downloadMainDB:: main.db does not exist. Error: %v", err)
+		log.Print("downloadMainDB:: main.db does not exist, will attempt to download by running 'sysdig-cli-scanner' in download stub mode.")
+
+		// Split the configuration command string into arguments
+		args := strings.Fields("./sysdig-cli-scanner --skipupload --no-cache file://test-image")
+		args = append(args, fmt.Sprintf("--apiurl=%s", yamlConfig.Config.SysdigAPIEndpoint))
+
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Env = append(os.Environ(), fmt.Sprintf("SECURE_API_TOKEN=%s", yamlConfig.Config.SysdigAPIToken))
+
+		// Create a pipe to the standard output of the cmd
+		stdoutPipe, err := cmd.StdoutPipe()
+		if err != nil {
+			log.Fatalf("downloadMainDB:: Failed to create stdout pipe: %v", err)
+		}
+
+		// Start the command
+		if err := cmd.Start(); err != nil {
+			log.Fatalf("downloadMainDB:: Failed to start cmd: %v", err)
+		}
+
+		// Use a scanner to read the command's stdout line by line
+		scanner := bufio.NewScanner(stdoutPipe)
+		for scanner.Scan() {
+			log.Printf("downloadMainDB:: Stub cmd output: %s", scanner.Text())
+		}
+
+		// Wait for command to finish and make sure errorcode is 1
+		err = cmd.Wait()
+		var exiterr *exec.ExitError
+		if errors.As(err, &exiterr) {
+			if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
+				exitCode := status.ExitStatus()
+
+				// Output scan-logs if we are in debug mode
+				if yamlConfig.Settings.LogLevel == "DEBUG" {
+					file, err := os.Open("scan-logs")
+					if err != nil {
+						log.Printf("downloadMainDB:: failed to open file: %v", err)
+					}
+					defer func(file *os.File) {
+						err := file.Close()
+						if err != nil {
+							log.Printf("downloadMainDB:: failed to close scan-logs. Error:: %v", err)
+						}
+					}(file) // Ensure the file is closed after function return
+
+					// Create a new Scanner for reading the file line by line
+					scanner := bufio.NewScanner(file)
+
+					// Loop through all lines of the file
+					for scanner.Scan() {
+						line := scanner.Text()                                     // Get the current line
+						log.Printf("downloadMainDB:: scan-logs output:: %s", line) // Output the line
+					}
+
+				}
+				log.Printf("downloadMainDB:: Stub execution error code: %d (2 is good)", exitCode)
+			}
+		}
+
+		log.Printf("downloadMainDB:: Rechecking for main.db exists")
+		_, err = os.Stat("main.db")
+		if err != nil {
+			log.Printf("downloadMainDB:: main.db does not exist, cannot continue, check above for donwload errors. Erorr: %s", err)
+		} else {
+			log.Print("downloadMainDB:: main.db exists.  Can continue")
+		}
+		log.Debug("downloadMainDB:: Exit()")
+		return statusCode, err
+	}
+	log.Debug("downloadMainDB:: main.db still exists, continuing")
+	log.Debug("downloadMainDB:: Exit()")
+	return 2, nil
+}
 
 func main() {
 	// Setting up signal catching
@@ -1218,13 +1514,21 @@ func main() {
 	// Register the signals you want to catch
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
-	log.Print("main:: Sysdig-Tanzu-Scanner v1.2.2-BW Enter()")
+	log.Print("main:: Sysdig-Tanzu-Scanner v1.2.3-BW Enter()")
 
 	// Parse yaml config file
 	yamlConfig, err := parseConfigFile()
 	if err != nil {
 		log.Fatalf("main:: Could not parse yamlConfig file.  Error: %v", err)
 	}
+
+	// Set logging level
+	logLevel, err := log.ParseLevel(yamlConfig.Settings.LogLevel)
+	if err != nil {
+		// Handle the error, perhaps defaulting to a specific log level
+		log.Fatalf("main:: Invalid log level specified (%s) in config.yaml: %v", yamlConfig.Settings.LogLevel, err)
+	}
+	log.SetLevel(logLevel)
 
 	// Parse command line parameters and override config if required
 	parseCommandLineParameters(&yamlConfig)
@@ -1238,56 +1542,33 @@ func main() {
 	go func() {
 		sig := <-sigs
 		fmt.Println()
-		fmt.Printf("Received %v, initiating cleanup...\n", sig)
+		fmt.Printf("main:: Received %v, initiating cleanup...\n", sig)
 		cleanup(&yamlConfig)
 		done <- true
 		os.Exit(-1)
 	}()
 
 	// Check if CLI scanner executable is available
-	if _, err := os.Stat("sysdig-cli-scanner"); os.IsNotExist(err) {
-		presentWorkingDirectory, err := os.Getwd()
-		if err != nil {
-			log.Printf("main:: Error checking if CLI scanner exists. Error: %v", err)
-		}
-		log.Fatalf("main:: Sysdig CLI Scanner (sysdig-cli-scanner) has not been found in: %s", presentWorkingDirectory)
+	if err = checkForCLIScanner(); err != nil {
+		log.Fatalf("main:: Could not find / check if sysdig-cli-scanner was found in current directory. Error: %v", err)
 	} else {
-		log.Printf("main:: Found sysdig-cli-scanner in current directory, continuing")
+		log.Print("main:: sysdig-cli-scanner found. Continuing")
 	}
 
 	// Actioning always download logic, delete the DB, so it can be re-downloaded
-	if yamlConfig.Settings.AlwaysDownloadVulndb == true {
-		log.Print("main:: Removing maindb due to force download as per config 'always_download_vulndb'")
-		err = os.RemoveAll("main.db")
-		err = os.RemoveAll("main.db.meta.json")
+	if err = removeMainDB(&yamlConfig); err != nil {
+		log.Fatalf("main:: Failed to remove Main.db, exiting. Error: %v", err)
 	}
 
 	// Predownload main database if not found
-	if _, err := os.Stat("main.db"); os.IsNotExist(err) {
-		log.Printf("main:: main.db does not exist. Error: %v", err)
-		log.Print("main:: main.db does not exist, will attempt to download by running Sysdig-cli-scanner in stub mode.")
-
-		// Split the configuration command string into arguments
-		args := strings.Fields("./sysdig-cli-scanner --skipupload --no-cache docker://test-image")
-		args = append(args, fmt.Sprintf("--apiurl=%s", yamlConfig.Config.SysdigAPIEndpoint))
-
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Env = append(os.Environ(), fmt.Sprintf("SECURE_API_TOKEN=%s", yamlConfig.Config.SysdigAPIToken))
-
-		// Start the command
-		if err := cmd.Start(); err != nil {
-			log.Fatalf("main:: Failed to start cmd: %v", err)
-
-		}
-		// Wait for command to finish and make sure errorcode is 1
-		err = cmd.Wait()
-		var exiterr *exec.ExitError
-		if errors.As(err, &exiterr) {
-			if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
-				exitCode := status.ExitStatus()
-				log.Printf("main:: Stub execution error code: %d (2 is good)", exitCode)
-			}
-		}
+	var statusCode int
+	if statusCode, err = downloadMainDB(&yamlConfig); err != nil {
+		log.Fatalf("main:: Failed to download Main.db, exiting. Statuscode: %d, Error: %v", statusCode, err)
+	}
+	if statusCode == 2 || statusCode == 0 {
+		log.Print("main:: Main.db donwload completed.")
+	} else {
+		log.Fatal("main:: Main.db donwload status != 2, exiting.  Review sysdig-cli-output above for clues.")
 	}
 
 	if _, err := os.Stat("main.db"); os.IsNotExist(err) {
@@ -1301,11 +1582,7 @@ func main() {
 		log.Fatalf("main:: Could not decode yamlConfig credentials.  Error: %v", err)
 	}
 
-	log.Println(yamlConfig)
-
-	log.Print("getAccessToken:: Enter()")
-	oAuthToken, err := getAccessToken(&yamlConfig, authCredentials)
-	log.Print("getAccessToken:: Exit()")
+	oAuthToken, err := getAccessToken(&yamlConfig, authCredentials, nil)
 
 	if err != nil {
 		log.Fatalf("main:: Error getting OAuth token: %v", err)
@@ -1344,7 +1621,13 @@ func main() {
 	if yamlConfig.Settings.ExecutionThreads > 0 {
 		log.Printf("main:: Overriding calculated execution threads (%d) with config value: %d", numWorkers, yamlConfig.Settings.ExecutionThreads)
 		numWorkers = yamlConfig.Settings.ExecutionThreads
+	} else {
+		log.Printf("main:: Execution threads (%d)", numWorkers)
 	}
+
+	log.Print("")
+	log.Print("")
+	log.Print("main:: Starting workers. Please wait... Execution results will be begin showing momentarily")
 	// Start a predefined number of workers
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1) // Increment the WaitGroup counter for each worker
