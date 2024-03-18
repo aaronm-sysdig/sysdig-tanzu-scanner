@@ -109,11 +109,60 @@ func decodeConfigCredentials(config config.Config, workerResult *executionresult
 	}
 }*/
 
-func getAccessToken(config *config.Config, creds *credentials.Credentials, workerResult *executionresults.WorkerResult) (oAuthToken *oauthtoken.OAuthToken, err error) {
+func _log(workerResult *executionresults.WorkerResult, msg string) {
 	if workerResult == nil {
-		log.Print("getAccessToken:: Enter()")
+		log.Print(msg)
 	} else {
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("getAccessToken:: Enter()"))
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprint(msg))
+	}
+}
+
+func getAccessTokenClientCredentials(yamlConfig *config.Config, workerResult *executionresults.WorkerResult) (oAuthToken *oauthtoken.OAuthToken, err error) {
+	_log(workerResult, "getAccessTokenClientCredentials:: Enter()")
+
+	configLogin := sysdighttp.DefaultSysdigRequestConfig()
+	configLogin.Method = "POST"
+	configLogin.URL = yamlConfig.Config.CFAuthEndpoint
+	configLogin.Verify = false
+	configLogin.Headers = map[string]string{
+		"Content-Type": "application/x-www-form-urlencoded",
+	}
+	configLogin.Data = map[string]string{
+		"client_id":     yamlConfig.Config.CFClientID,
+		"client_secret": yamlConfig.Config.CFClientSecret,
+		"grant_type":    yamlConfig.Config.CFClientGrantType,
+		"scope":         yamlConfig.Config.CFClientScope,
+		"token_format":  yamlConfig.Config.CFTokenFormat,
+	}
+
+	var objResponse *http.Response
+	_log(workerResult, fmt.Sprintf("getAccessTokenClientCredentials:: Executing URL: %s", configLogin.URL))
+
+	if objResponse, err = sysdighttp.SysdigRequest(configLogin); err != nil {
+		log.Fatalf("getAccessTokenClientCredentials:: Failed to execute query to get token. Error: %v", err)
+	}
+
+	// Initialize oAuthToken before unmarshalling the JSON into it, so we have a valid construct to use
+	oAuthToken = &oauthtoken.OAuthToken{}
+
+	if err = sysdighttp.ResponseBodyToJson(objResponse, oAuthToken); err != nil {
+		log.Fatalf("getAccessTokenClientCredentials:: ResponseBodyToJson error: %v", err)
+	}
+	defer objResponse.Body.Close()
+
+	// Calculate the expiry time based on the current time and expires_in value
+	oAuthToken.ExpiryTime = time.Now().Add(time.Second * time.Duration(oAuthToken.ExpiresIn))
+
+	_log(workerResult, fmt.Sprintf("getAccessTokenClientCredentials:: Exit()"))
+
+	return oAuthToken, nil
+}
+
+func getAccessTokenPassword(config *config.Config, creds *credentials.Credentials, workerResult *executionresults.WorkerResult) (oAuthToken *oauthtoken.OAuthToken, err error) {
+	if workerResult == nil {
+		log.Print("getAccessTokenPassword:: Enter()")
+	} else {
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("getAccessTokenPassword:: Enter()"))
 	}
 
 	configLogin := sysdighttp.DefaultSysdigRequestConfig()
@@ -132,13 +181,13 @@ func getAccessToken(config *config.Config, creds *credentials.Credentials, worke
 
 	var objResponse *http.Response
 	if workerResult == nil {
-		log.Printf("getAccessToken:: Executing URL: %s", configLogin.URL)
+		log.Printf("getAccessTokenPassword:: Executing URL: %s", configLogin.URL)
 	} else {
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getAccessToken:: Executing URL: %s", configLogin.URL))
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getAccessTokenPassword:: Executing URL: %s", configLogin.URL))
 	}
 
 	if objResponse, err = sysdighttp.SysdigRequest(configLogin); err != nil {
-		log.Fatalf("getAccessToken:: Failed to execute query to get token. Error: %v", err)
+		log.Fatalf("getAccessTokenPassword:: Failed to execute query to get token. Error: %v", err)
 	}
 
 	// Initialize oAuthToken before unmarshalling the JSON into it, so we have a valid construct to use
@@ -146,7 +195,7 @@ func getAccessToken(config *config.Config, creds *credentials.Credentials, worke
 
 	err = sysdighttp.ResponseBodyToJson(objResponse, oAuthToken)
 	if err != nil {
-		log.Fatalf("getAccessToken:: ResponseBodyToJson error: %v", err)
+		log.Fatalf("getAccessTokenPassword:: ResponseBodyToJson error: %v", err)
 	}
 	defer objResponse.Body.Close()
 
@@ -154,9 +203,9 @@ func getAccessToken(config *config.Config, creds *credentials.Credentials, worke
 	oAuthToken.ExpiryTime = time.Now().Add(time.Second * time.Duration(oAuthToken.ExpiresIn))
 
 	if workerResult == nil {
-		log.Print("getAccessToken:: Exit()")
+		log.Print("getAccessTokenPassword:: Exit()")
 	} else {
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("getAccessToken:: Exit()"))
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("getAccessTokenPassword:: Exit()"))
 	}
 
 	return oAuthToken, nil
@@ -208,16 +257,34 @@ func getOrganizations(yamlConfig *config.Config, authToken *oauthtoken.OAuthToke
 	return &jsonRunningApps.Resources, nil
 }*/
 
+func getAccessToken(yamlConfig *config.Config, creds *credentials.Credentials, workerResult *executionresults.WorkerResult) (oAuthToken *oauthtoken.OAuthToken, err error) {
+	if workerResult == nil {
+		log.Print("getAccessToken:: Enter()")
+	} else {
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("getAccessToken:: Enter()"))
+	}
+
+	if yamlConfig.Config.CFClientID != "" {
+		oAuthToken, err = getAccessTokenClientCredentials(yamlConfig, workerResult)
+	} else if yamlConfig.Config.CFUsername != "" {
+		oAuthToken, err = getAccessTokenPassword(yamlConfig, creds, workerResult)
+	}
+
+	if workerResult == nil {
+		log.Print("getAccessToken:: Exit()")
+	} else {
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("getAccessToken:: Enter()"))
+	}
+
+	return oAuthToken, err
+}
+
 func generateRunningApps(yamlConfig *config.Config, authToken *oauthtoken.OAuthToken, creds *credentials.Credentials) ([]runningapps.Resource, error) {
 	log.Debug("generateRunningApps:: Enter()")
 	var err error
 
 	if !authToken.IsValid() {
-		log.Print("getAccessToken:: Enter()")
-		authToken, err = getAccessToken(yamlConfig, creds, nil)
-		log.Print("getAccessToken:: Exit()")
-
-		if err != nil {
+		if authToken, err = getAccessToken(yamlConfig, creds, nil); err != nil {
 			log.Fatalf("generateRunningApps:: Failed to refresh OAuthToken. Error: %v", err)
 		}
 	}
@@ -1514,7 +1581,7 @@ func main() {
 	// Register the signals you want to catch
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
-	log.Print("main:: Sysdig-Tanzu-Scanner v1.2.3-BW Enter()")
+	log.Print("main:: Sysdig-Tanzu-Scanner v1.2.4-BW Enter()")
 
 	// Parse yaml config file
 	yamlConfig, err := parseConfigFile()

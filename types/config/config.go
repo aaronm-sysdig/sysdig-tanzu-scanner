@@ -23,6 +23,11 @@ type Config struct {
 		SysdigAPIEndpoint string `yaml:"sysdig_api_endpoint"`
 		CFUsername        string `yaml:"cf_username"`
 		CFPassword        string `yaml:"cf_password"`
+		CFClientSecret    string `yaml:"cf_client_secret"`
+		CFClientID        string `yaml:"cf_client_id"`
+		CFClientGrantType string `yaml:"cf_client_grant_type"`
+		CFClientScope     string `yaml:"cf_client_scope"`
+		CFTokenFormat     string `yaml:"cf_token_format"`
 	} `yaml:"config"`
 	Stacks map[string]string `yaml:"stacks"`
 }
