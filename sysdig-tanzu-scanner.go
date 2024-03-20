@@ -26,7 +26,6 @@ import (
 	"syscall"
 	"sysdig-tanzu-scanner/sysdighttp"
 	"sysdig-tanzu-scanner/types/config"
-	"sysdig-tanzu-scanner/types/credentials"
 	"sysdig-tanzu-scanner/types/currentdroplet"
 	"sysdig-tanzu-scanner/types/deployedrevision"
 	"sysdig-tanzu-scanner/types/executionresults"
@@ -66,38 +65,31 @@ func parseConfigFile() (config.Config, error) {
 	return tanzuConfig, nil
 }
 
-func decodeConfigCredentials(config config.Config, workerResult *executionresults.WorkerResult) (*credentials.Credentials, error) {
-	if workerResult != nil {
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("decodeConfigCredentials:: Enter()"))
+func decodeConfigCredentials(yamlConfig *config.Config) {
+	log.Info("decodeConfigCredentials:: Enter()")
+
+	if yamlConfig.Config.CFClientID == "" {
+		log.Info("decodeConfigCredentials:: CFClientID is empty, using Username/Password")
+		// Decode the base64 encoded username
+		decodedUsername, err := base64.StdEncoding.DecodeString(yamlConfig.Config.CFUsername)
+		if err != nil {
+			log.Fatalf("decodeConfigCredentials:: Could not decode CFUsername. Error: %v", err)
+		}
+
+		// Decode the base64 encoded password
+		decodedPassword, err := base64.StdEncoding.DecodeString(yamlConfig.Config.CFPassword)
+		if err != nil {
+			log.Fatalf("decodeConfigCredentials:: Could not decode CFPassword. Error: %v", err)
+		}
+
+		yamlConfig.Config.CFUsername = string(decodedUsername)
+		yamlConfig.Config.CFPassword = string(decodedPassword)
 	} else {
-		log.Debug("decodeConfigCredentials:: Enter()")
+		log.Info("decodeConfigCredentials:: CFClientID != '', skipping Username/Password decoding")
+
 	}
 
-	// Decode the base64 encoded username
-	decodedUsername, err := base64.StdEncoding.DecodeString(config.Config.CFUsername)
-	if err != nil {
-		return nil, err
-	}
-
-	// Decode the base64 encoded password
-	decodedPassword, err := base64.StdEncoding.DecodeString(config.Config.CFPassword)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create an instance of Credentials struct with decoded values
-	tanzuCredentials := credentials.Credentials{
-		Username:        string(decodedUsername),
-		Password:        string(decodedPassword),
-		CFLoginEndpoint: config.Config.CFAuthEndpoint,
-	}
-
-	if workerResult != nil {
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("decodeConfigCredentials:: Exit()"))
-	} else {
-		log.Debug("decodeConfigCredentials:: Exit()")
-	}
-	return &tanzuCredentials, nil
+	log.Info("decodeConfigCredentials:: Exit()")
 }
 
 /*func refreshAccesstoken(config *Config, existingOAuthToken *OAuthToken, creds *Credentials) (*OAuthToken, error) {
@@ -158,33 +150,25 @@ func getAccessTokenClientCredentials(yamlConfig *config.Config, workerResult *ex
 	return oAuthToken, nil
 }
 
-func getAccessTokenPassword(config *config.Config, creds *credentials.Credentials, workerResult *executionresults.WorkerResult) (oAuthToken *oauthtoken.OAuthToken, err error) {
-	if workerResult == nil {
-		log.Print("getAccessTokenPassword:: Enter()")
-	} else {
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("getAccessTokenPassword:: Enter()"))
-	}
+func getAccessTokenPassword(yamlConfig *config.Config, workerResult *executionresults.WorkerResult) (oAuthToken *oauthtoken.OAuthToken, err error) {
+	_log(workerResult, fmt.Sprint("getAccessTokenPassword:: Enter()"))
 
 	configLogin := sysdighttp.DefaultSysdigRequestConfig()
 	configLogin.Method = "POST"
-	configLogin.URL = config.Config.CFAuthEndpoint
+	configLogin.URL = yamlConfig.Config.CFAuthEndpoint
 	configLogin.Verify = false
 	configLogin.Auth = [2]string{"cf", ""}
 	configLogin.Headers = map[string]string{
 		"Content-Type": "application/x-www-form-urlencoded",
 	}
 	configLogin.Data = map[string]string{
-		"username":   creds.Username,
-		"password":   creds.Password,
+		"username":   yamlConfig.Config.CFUsername,
+		"password":   yamlConfig.Config.CFPassword,
 		"grant_type": "password",
 	}
 
 	var objResponse *http.Response
-	if workerResult == nil {
-		log.Printf("getAccessTokenPassword:: Executing URL: %s", configLogin.URL)
-	} else {
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getAccessTokenPassword:: Executing URL: %s", configLogin.URL))
-	}
+	_log(workerResult, fmt.Sprintf("getAccessTokenPassword:: Executing URL: %s", configLogin.URL))
 
 	if objResponse, err = sysdighttp.SysdigRequest(configLogin); err != nil {
 		log.Fatalf("getAccessTokenPassword:: Failed to execute query to get token. Error: %v", err)
@@ -202,11 +186,7 @@ func getAccessTokenPassword(config *config.Config, creds *credentials.Credential
 	// Calculate the expiry time based on the current time and expires_in value
 	oAuthToken.ExpiryTime = time.Now().Add(time.Second * time.Duration(oAuthToken.ExpiresIn))
 
-	if workerResult == nil {
-		log.Print("getAccessTokenPassword:: Exit()")
-	} else {
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("getAccessTokenPassword:: Exit()"))
-	}
+	_log(workerResult, fmt.Sprint("getAccessTokenPassword:: Exit()"))
 
 	return oAuthToken, nil
 }
@@ -257,34 +237,26 @@ func getOrganizations(yamlConfig *config.Config, authToken *oauthtoken.OAuthToke
 	return &jsonRunningApps.Resources, nil
 }*/
 
-func getAccessToken(yamlConfig *config.Config, creds *credentials.Credentials, workerResult *executionresults.WorkerResult) (oAuthToken *oauthtoken.OAuthToken, err error) {
-	if workerResult == nil {
-		log.Print("getAccessToken:: Enter()")
-	} else {
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("getAccessToken:: Enter()"))
-	}
+func getAccessToken(yamlConfig *config.Config, workerResult *executionresults.WorkerResult) (oAuthToken *oauthtoken.OAuthToken, err error) {
+	_log(workerResult, fmt.Sprint("getAccessToken:: Enter()"))
 
 	if yamlConfig.Config.CFClientID != "" {
 		oAuthToken, err = getAccessTokenClientCredentials(yamlConfig, workerResult)
 	} else if yamlConfig.Config.CFUsername != "" {
-		oAuthToken, err = getAccessTokenPassword(yamlConfig, creds, workerResult)
+		oAuthToken, err = getAccessTokenPassword(yamlConfig, workerResult)
 	}
 
-	if workerResult == nil {
-		log.Print("getAccessToken:: Exit()")
-	} else {
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("getAccessToken:: Enter()"))
-	}
+	_log(workerResult, fmt.Sprint("getAccessToken:: Exit()"))
 
 	return oAuthToken, err
 }
 
-func generateRunningApps(yamlConfig *config.Config, authToken *oauthtoken.OAuthToken, creds *credentials.Credentials) ([]runningapps.Resource, error) {
-	log.Debug("generateRunningApps:: Enter()")
+func generateRunningApps(yamlConfig *config.Config, authToken *oauthtoken.OAuthToken) ([]runningapps.Resource, error) {
+	log.Info("generateRunningApps:: Enter()")
 	var err error
 
 	if !authToken.IsValid() {
-		if authToken, err = getAccessToken(yamlConfig, creds, nil); err != nil {
+		if authToken, err = getAccessToken(yamlConfig, nil); err != nil {
 			log.Fatalf("generateRunningApps:: Failed to refresh OAuthToken. Error: %v", err)
 		}
 	}
@@ -302,11 +274,13 @@ func generateRunningApps(yamlConfig *config.Config, authToken *oauthtoken.OAuthT
 	}
 
 	var jsonRunningAppsComplete runningapps.RunningApps
-	err = sysdighttp.ResponseBodyToJson(objResponse, &jsonRunningAppsComplete)
-	if err != nil {
+	if err = sysdighttp.ResponseBodyToJson(objResponse, &jsonRunningAppsComplete); err != nil {
 		return nil, fmt.Errorf("generateRunningApps:: ResponseBodyToJson error: %v", err)
 	}
-	log.Debug("generateRunningApps:: Exit()")
+	for _, app := range jsonRunningAppsComplete.Resources {
+		log.Printf("generateRunningApps:: Adding app to process. App: '%s', Buildpack: '%s', Stack: '%s'", app.Name, app.Lifecycle.Data.Buildpacks, app.Lifecycle.Data.Stack)
+	}
+	log.Info("generateRunningApps:: Exit()")
 	return jsonRunningAppsComplete.Resources, nil
 
 	/*
@@ -342,11 +316,9 @@ func getSpace(appName string, spaceURL string, oAuthToken *oauthtoken.OAuthToken
 	configSpace.Headers = map[string]string{
 		"authorization": "bearer " + oAuthToken.AccessToken,
 	}
-	if workerResult == nil {
-		log.Printf("getSpaceName:: Executing URL: %s", configSpace.URL)
-	} else {
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getSpaceName:: Executing URL: %s", configSpace.URL))
-	}
+
+	_log(workerResult, fmt.Sprintf("getSpaceName:: Executing URL: %s", configSpace.URL))
+
 	objSpaceResponse, err := sysdighttp.SysdigRequest(configSpace)
 	if err != nil {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getSpaceName:: Failed to exequte query to get space for %v.  Error: %v", appName, err))
@@ -379,11 +351,8 @@ func getDeployedRevision(appName string, deployedRevisionURL string, oAuthToken 
 	configDeployedRevision.Headers = map[string]string{
 		"authorization": "bearer " + oAuthToken.AccessToken,
 	}
-	if workerResult == nil {
-		log.Printf("getDeployedRevision:: Executing URL: %s", configDeployedRevision.URL)
-	} else {
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getDeployedRevision:: Executing URL: %s", configDeployedRevision.URL))
-	}
+	_log(workerResult, fmt.Sprintf("getDeployedRevision:: Executing URL: %s", configDeployedRevision.URL))
+
 	objDeployedRevisionResponse, err := sysdighttp.SysdigRequest(configDeployedRevision)
 	if err != nil {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getDeployedRevision:: Failed to exequte query to get deployed revision for %v.  Error: %v", appName, err))
@@ -413,11 +382,8 @@ func getOrganization(appName string, organizationURL string, oAuthToken *oauthto
 	configOrganization.Headers = map[string]string{
 		"authorization": "bearer " + oAuthToken.AccessToken,
 	}
-	if workerResult == nil {
-		log.Printf("getOrganization:: Executing URL: %s", configOrganization.URL)
-	} else {
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getOrganization:: Executing URL: %s", configOrganization.URL))
-	}
+	_log(workerResult, fmt.Sprintf("getOrganization:: Executing URL: %s", configOrganization.URL))
+
 	objOrganizationResponse, err := sysdighttp.SysdigRequest(configOrganization)
 	if err != nil {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getOrganization:: Failed to exequte query to get organization for %v.  Error: %v", appName, err))
@@ -455,11 +421,8 @@ func downloadDroplet(app runningapps.Resource, dropletFilePath string, authToken
 	}
 	configCurrentDroplet.Verify = false
 
-	if workerResult == nil {
-		log.Printf("downloadDroplet:: Executing URL: %s", configCurrentDroplet.URL)
-	} else {
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("downloadDroplet:: Executing URL: %s", configCurrentDroplet.URL))
-	}
+	_log(workerResult, fmt.Sprintf("downloadDroplet:: Executing URL: %s", configCurrentDroplet.URL))
+
 	objCurrentDropletResponse, err := sysdighttp.SysdigRequest(configCurrentDroplet)
 	if err != nil {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("downloadDroplet:: Failed to get droplet info: %v", err))
@@ -483,11 +446,8 @@ func downloadDroplet(app runningapps.Resource, dropletFilePath string, authToken
 		"authorization": "bearer " + authToken.AccessToken,
 	}
 	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("downloadDroplet:: Downloading droplet for app: %s from:  %s", app.Name, jsonCurrentDroplet.Links["download"].Href))
-	if workerResult == nil {
-		log.Printf("downloadDroplet:: Executing URL: %s", configDownload.URL)
-	} else {
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("downloadDroplet:: Executing URL: %s", configDownload.URL))
-	}
+	_log(workerResult, fmt.Sprintf("downloadDroplet:: Executing URL: %s", configDownload.URL))
+
 	objDownloadDroplet, err := sysdighttp.SysdigRequest(configDownload)
 	if err != nil {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("downloadDroplet:: Failed to download droplet for app: %s. Error: : %v", app.Name, err))
@@ -648,16 +608,11 @@ func logDirectoryTree(startPath string, workerResult *executionresults.WorkerRes
 	return err
 }
 
-func buildOCIDirectory(appResource runningapps.Resource,
-	spaceResource *spacepayload.SpacePayload,
-	organizationResource *organizationpayload.OrganizationPayload,
-	stackFilePath string,
-	dropletFilePath string,
-	workerResult *executionresults.WorkerResult) error {
+func buildOCIDirectory(yamlConfig *config.Config, appResource runningapps.Resource, spaceResource *spacepayload.SpacePayload, organizationResource *organizationpayload.OrganizationPayload, stackFilePath string, dropletFilePath string, workerResult *executionresults.WorkerResult) error {
 	var err error
 
 	workerResult.Logs = append(workerResult.Logs, "buildOCIDirectory:: Enter()")
-	ociPath := fmt.Sprintf("oci/%s/%s/%s", organizationResource.Name, spaceResource.Name, appResource.Name)
+	ociPath := fmt.Sprintf("%s/oci/%s/%s/%s", yamlConfig.Settings.WorkingDirectory, organizationResource.Name, spaceResource.Name, appResource.Name)
 	workerResult.OCIPath = ociPath
 	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("buildOCIDirectory:: App: %s, OCI Path: '%s'", appResource.Name, ociPath))
 
@@ -848,31 +803,30 @@ func buildOCIDirectory(appResource runningapps.Resource,
 	}
 
 	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("buildOCIDirectory:: Writing oci-layout to: %s", ociLayoutFilePath))
-	err = logDirectoryTree(ociPath, workerResult)
-	if err != nil {
+	if err = logDirectoryTree(ociPath, workerResult); err != nil {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("logDirectoryTree:: Error: %v", err))
 	}
 	workerResult.Logs = append(workerResult.Logs, "buildOCIDirectory:: Exit()")
 	return nil
 }
 
-func getCurrentDir() string {
+/*func getCurrentDir() string {
 	dir, err := os.Getwd()
 	if err != nil {
 		log.Fatalf("Failed to get current directory: %v", err)
 	}
 	return dir
-}
+}*/
 
 func executeAndLogSysdigScanner(appResource runningapps.Resource, yamlConfig *config.Config, organizationResource organizationpayload.OrganizationPayload, spaceResource spacepayload.SpacePayload, sysdigAPIToken string, workerResult *executionresults.WorkerResult) error {
 
 	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("executeAndLogSysdigScanner:: Enter()"))
 
-	ociDirPath := fmt.Sprintf("file://%s/oci/%s/%s/%s", getCurrentDir(), organizationResource.Name, spaceResource.Name, appResource.Name)
+	ociDirPath := fmt.Sprintf("file://%s/oci/%s/%s/%s", yamlConfig.Settings.WorkingDirectory, organizationResource.Name, spaceResource.Name, appResource.Name)
 
 	// Append the OCI directory path to the arguments
 	filenameUUID := uuid.New()
-	scanResultsPath := "scanResults"
+	scanResultsPath := fmt.Sprintf("%s/scanResults", yamlConfig.Settings.WorkingDirectory)
 
 	_, err := os.Stat(scanResultsPath)
 	if err != nil {
@@ -1219,7 +1173,7 @@ func extractAndWriteCSV(executionResults *[]executionresults.WorkerResult,
 	csvData = append([][]string{csvHeaderRow}, csvData...)
 
 	// Format the current time to generate the filename
-	err := writeCSV(fmt.Sprintf("%s-Tanzu-Bankwest.csv", time.Now().Format("20060102150405")), &csvData)
+	err := writeCSV(fmt.Sprintf("%s/%s-Tanzu-Bankwest.csv", yamlConfig.Settings.WorkingDirectory, time.Now().Format("20060102150405")), &csvData)
 	if err != nil {
 		log.Printf("extractAndWriteCSV:: Could not write CSV.")
 		return err
@@ -1251,8 +1205,7 @@ func processApp(appResource runningapps.Resource, yamlConfig config.Config, thre
 	workerResult.Logs = append(workerResult.Logs, "processApp:: Enter()")
 
 	// Getting oAuthToken for thread
-	authCredentials, err := decodeConfigCredentials(yamlConfig, &workerResult)
-	oAuthToken, err := getAccessToken(&yamlConfig, authCredentials, &workerResult)
+	oAuthToken, err := getAccessToken(&yamlConfig, &workerResult)
 
 	if err != nil {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Error getting OAuth token: %v", err))
@@ -1282,9 +1235,9 @@ func processApp(appResource runningapps.Resource, yamlConfig config.Config, thre
 		return workerResult, err
 	}
 
-	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Found spaceName: %v, organizationName: %v, Deployed Version: %d for AppName: %v", jsonSpace.Name, jsonOrganization.Name, intDeployedRevisionVersion, appResource.Name))
+	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Found spaceName: '%v', organizationName: '%v', Deployed Version: '%d' for AppName: '%v'", jsonSpace.Name, jsonOrganization.Name, intDeployedRevisionVersion, appResource.Name))
 
-	dropletFilePath := fmt.Sprintf("droplets/%v/%v/%v.tar.gz", jsonOrganization.Name, jsonSpace.Name, appResource.Name)
+	dropletFilePath := fmt.Sprintf("%s/droplets/%v/%v/%v.tar.gz", yamlConfig.Settings.WorkingDirectory, jsonOrganization.Name, jsonSpace.Name, appResource.Name)
 	workerResult.DropletFilename = dropletFilePath
 	if _, err := os.Stat(dropletFilePath); os.IsNotExist(err) {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Droplet file does not exist: %s, typing to download", dropletFilePath))
@@ -1298,47 +1251,45 @@ func processApp(appResource runningapps.Resource, yamlConfig config.Config, thre
 	}
 
 	// Check tha we have the stack for the app.  If not then skip app
-	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Stack for App %s: %s", appResource.Name, appResource.Lifecycle.Data.Stack))
+	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Stack for App '%s': '%s'", appResource.Name, appResource.Lifecycle.Data.Stack))
 	if stackPath, ok := yamlConfig.Stacks[appResource.Lifecycle.Data.Stack]; ok {
 		if _, err := os.Stat(stackPath); os.IsNotExist(err) {
-			workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Stack file for '%s' does not exist at path: %s", appResource.Lifecycle.Data.Stack, stackPath))
-			workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Skipping processing of App: %s ", appResource.Name))
+			workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Stack file for '%s' does not exist at path: '%s'", appResource.Lifecycle.Data.Stack, stackPath))
+			workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Skipping processing of App: '%s' ", appResource.Name))
 			return workerResult, err
 		} else {
 			// Proceed with using the stack file
-			workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Stack file for '%s' exists at path: %s", appResource.Lifecycle.Data.Stack, stackPath))
+			workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Stack file for '%s' exists at path: '%s'", appResource.Lifecycle.Data.Stack, stackPath))
 		}
 	} else {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Stack '%s' does not exist in the yamlConfig", appResource.Lifecycle.Data.Stack))
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Skipping processing of App: %s ", appResource.Name))
-		return workerResult, fmt.Errorf("processApp:: Skipping processing of App: %s", appResource.Name)
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Skipping processing of App: '%s' ", appResource.Name))
+		return workerResult, fmt.Errorf("processApp:: Skipping processing of App: '%s'", appResource.Name)
 	}
 
 	// Build OCI container
-	err = buildOCIDirectory(appResource, jsonSpace, jsonOrganization, yamlConfig.Stacks[appResource.Lifecycle.Data.Stack], dropletFilePath, &workerResult)
-	if err != nil {
+	if err = buildOCIDirectory(&yamlConfig, appResource, jsonSpace, jsonOrganization, yamlConfig.Stacks[appResource.Lifecycle.Data.Stack], dropletFilePath, &workerResult); err != nil {
 		return workerResult, err
 	}
 
-	err = executeAndLogSysdigScanner(appResource, &yamlConfig, *jsonOrganization, *jsonSpace, yamlConfig.Config.SysdigAPIToken, &workerResult)
-	if err != nil {
+	// Execute Sysdig scanner
+	if err = executeAndLogSysdigScanner(appResource, &yamlConfig, *jsonOrganization, *jsonSpace, yamlConfig.Config.SysdigAPIToken, &workerResult); err != nil {
 		return workerResult, err
 	}
+
 	workerResult.Success = true
 	workerResult.ThreadID = threadID
 
 	// Always cleanup if required
 	defer func() {
 		if yamlConfig.Settings.KeepDroplets == false {
-			err = os.RemoveAll(workerResult.DropletFilename)
-			if err != nil {
-				workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp Cleanup:: Could not delete droplet: %s. Error: %v", workerResult.DropletFilename, err))
+			if err = os.RemoveAll(workerResult.DropletFilename); err != nil {
+				workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp Cleanup:: Could not delete droplet: '%s'. Error: '%v'", workerResult.DropletFilename, err))
 			}
 		}
 		if yamlConfig.Settings.KeepOCI == false {
-			err = os.RemoveAll(workerResult.OCIPath)
-			if err != nil {
-				workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp Cleanup:: Could not delete OCI path: %s. Error: %v", workerResult.OCIPath, err))
+			if err = os.RemoveAll(workerResult.OCIPath); err != nil {
+				workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp Cleanup:: Could not delete OCI path: '%s'. Error: %v", workerResult.OCIPath, err))
 			}
 		}
 	}()
@@ -1346,46 +1297,47 @@ func processApp(appResource runningapps.Resource, yamlConfig config.Config, thre
 	return workerResult, nil
 }
 
-func worker(id int, workQueue <-chan runningapps.Resource, resultsChan chan<- executionresults.WorkerResult, yamlConfig config.Config, wg *sync.WaitGroup) {
+func worker(id int, workQueue <-chan runningapps.Resource, startWorkers <-chan struct{}, resultsChan chan<- executionresults.WorkerResult, yamlConfig config.Config, wg *sync.WaitGroup) {
 	defer wg.Done()
+	<-startWorkers // Wait for the start signal
 	var result executionresults.WorkerResult
 	var err error
 	for app := range workQueue {
 		if app.State == "STARTED" {
 			result, err = processApp(app, yamlConfig, id)
 			if err != nil {
-				result.Logs = append(result.Logs, fmt.Sprintf("Worker %d: Error processing app: %v", id, err))
+				result.Logs = append(result.Logs, fmt.Sprintf("Worker '%d': Error processing app '%s'. Error: %v", id, app.Name, err))
 			}
 		}
 		resultsChan <- result
 	}
 }
 
+func removeFolder(foldertoRremove string) {
+	log.Print("removeFolder:: Enter()")
+	log.Printf("removeFolder:: Removing '%s'", foldertoRremove)
+	if err := os.RemoveAll(foldertoRremove); err != nil {
+		log.Printf("removeFolder:: Could not delete '%s' directory, continuing.  Error: %v", foldertoRremove, err)
+	}
+	log.Print("removeFolder:: Exit()")
+}
+
 func cleanup(yamlConfig *config.Config) {
-	var err error
+	log.Printf("cleanup:: Enter()")
+
 	if yamlConfig.Settings.KeepOCI == false {
-		log.Print("main:: Deleting OCI directory")
-		err = os.RemoveAll("oci")
-		if err != nil {
-			log.Printf("cleanup:: Could not delete OCI directory.  Error: %v", err)
-		}
+		removeFolder(fmt.Sprintf("%s/oci", yamlConfig.Settings.WorkingDirectory))
 	}
 
 	if yamlConfig.Settings.KeepScanLogs == false {
-		log.Print("main:: Deleting Scan Logs directory")
-		err = os.RemoveAll("scanResults")
-		if err != nil {
-			log.Printf("cleanup:: Could not delete scanResults folder.  Error: %v", err)
-		}
+		removeFolder(fmt.Sprintf("%s/scanResults", yamlConfig.Settings.WorkingDirectory))
 	}
 
 	if yamlConfig.Settings.KeepDroplets == false {
-		log.Print("main:: Deleting Droplets directory")
-		err = os.RemoveAll("droplets")
-		if err != nil {
-			log.Printf("cleanup:: Could not delete droplets folder.  Error: %v", err)
-		}
+		removeFolder(fmt.Sprintf("%s/droplets", yamlConfig.Settings.WorkingDirectory))
 	}
+
+	log.Printf("cleanup:: Exit()")
 }
 
 func parseCommandLineParameters(yamlConfig *config.Config) {
@@ -1430,26 +1382,41 @@ func parseEnvironmentVariables(yamlConfig *config.Config) {
 	var cfUsername string
 	var cfPassword string
 	var sysdigAPIToken string
+	var cfClientID string
+	var cfClientSecret string
 
 	cfUsername = os.Getenv("CF_USERNAME")
 	cfPassword = os.Getenv("CF_PASSWORD")
+	cfClientID = os.Getenv("CF_CLIENTID")
+	cfClientSecret = os.Getenv("CF_CLIENTSECRET")
+
 	sysdigAPIToken = os.Getenv("SYSDIG_API_TOKEN")
 
 	// Parse the fla
 
 	if cfUsername != "" {
 		yamlConfig.Config.CFUsername = cfUsername
-		log.Print("parseEnvironmentVariables:: Overriding CFUsername with command line")
+		log.Print("parseEnvironmentVariables:: Overriding CFUsername with environment variable")
 	}
 
 	if cfPassword != "" {
 		yamlConfig.Config.CFPassword = cfPassword
-		log.Print("parseEnvironmentVariables:: Overriding CFPassword with command line")
+		log.Print("parseEnvironmentVariables:: Overriding CFPassword with environment variable")
 	}
 
 	if sysdigAPIToken != "" {
 		yamlConfig.Config.SysdigAPIToken = sysdigAPIToken
-		log.Print("parseEnvironmentVariables:: Overriding sysdigAPIToken with command line")
+		log.Print("parseEnvironmentVariables:: Overriding sysdigAPIToken with environment variable")
+	}
+
+	if cfClientID != "" {
+		yamlConfig.Config.CFClientID = cfClientID
+		log.Print("parseEnvironmentVariables:: Overriding cfClientID with environment variable")
+	}
+
+	if cfClientSecret != "" {
+		yamlConfig.Config.CFClientSecret = cfClientSecret
+		log.Print("parseEnvironmentVariables:: Overriding CFClientSecret with environment variable")
 	}
 
 	log.Print("parseEnvironmentVariables:: Exit()")
@@ -1472,19 +1439,21 @@ func checkForCLIScanner() (err error) {
 }
 
 func removeMainDB(yamlConfig *config.Config) (err error) {
-	log.Debug("removeMainDB:: Enter()")
+	log.Info("removeMainDB:: Enter()")
 	if yamlConfig.Settings.AlwaysDownloadVulndb == true {
-		log.Print("removeMainDB:: Removing maindb due to force download as per config 'always_download_vulndb'")
+		log.Print("removeMainDB:: Removing maindb due to force download as per config 'always_download_vulndb == true'")
 		if err = os.RemoveAll("main.db"); err != nil {
-			log.Debug("removeMainDB:: Exit()")
+			log.Info("removeMainDB:: Exit()")
 			return err
 		}
 		if err = os.RemoveAll("main.db.meta.json"); err != nil {
-			log.Debug("removeMainDB:: Exit()")
+			log.Info("removeMainDB:: Exit()")
 			return err
 		}
+	} else {
+		log.Info("removeMainDB:: Not removing maindb as per 'always_download_vulndb == false'")
 	}
-	log.Debug("removeMainDB:: Exit()")
+	log.Info("removeMainDB:: Exit()")
 	return err
 }
 
@@ -1561,7 +1530,7 @@ func downloadMainDB(yamlConfig *config.Config) (statusCode int, err error) {
 		log.Printf("downloadMainDB:: Rechecking for main.db exists")
 		_, err = os.Stat("main.db")
 		if err != nil {
-			log.Printf("downloadMainDB:: main.db does not exist, cannot continue, check above for donwload errors. Erorr: %s", err)
+			log.Printf("downloadMainDB:: main.db does not exist, cannot continue, check above for download errors. Erorr: %s", err)
 		} else {
 			log.Print("downloadMainDB:: main.db exists.  Can continue")
 		}
@@ -1573,6 +1542,19 @@ func downloadMainDB(yamlConfig *config.Config) (statusCode int, err error) {
 	return 2, nil
 }
 
+func createWorkingDirectory(yamlConfig *config.Config) {
+	log.Info("createWorkingDirectory:: Enter()")
+	if yamlConfig.Settings.WorkingDirectory != "" {
+		if err := os.MkdirAll(yamlConfig.Settings.WorkingDirectory, os.ModePerm); err != nil {
+			log.Fatalf("main:: Failed to create working directory '%s'. Error: %v", yamlConfig.Settings.WorkingDirectory, err)
+		}
+	} else {
+		log.Info("createWorkingDirectory:: Working directory not set. Defaulting to .")
+		yamlConfig.Settings.WorkingDirectory = "."
+	}
+	log.Info("createWorkingDirectory:: Exit()")
+}
+
 func main() {
 	// Setting up signal catching
 	sigs := make(chan os.Signal, 1)
@@ -1581,7 +1563,7 @@ func main() {
 	// Register the signals you want to catch
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
-	log.Print("main:: Sysdig-Tanzu-Scanner v1.2.4-BW Enter()")
+	log.Print("main:: Sysdig-Tanzu-Scanner v1.2.5-BW Enter()")
 
 	// Parse yaml config file
 	yamlConfig, err := parseConfigFile()
@@ -1633,9 +1615,9 @@ func main() {
 		log.Fatalf("main:: Failed to download Main.db, exiting. Statuscode: %d, Error: %v", statusCode, err)
 	}
 	if statusCode == 2 || statusCode == 0 {
-		log.Print("main:: Main.db donwload completed.")
+		log.Print("main:: Main.db download completed.")
 	} else {
-		log.Fatal("main:: Main.db donwload status != 2, exiting.  Review sysdig-cli-output above for clues.")
+		log.Fatal("main:: Main.db download status != 2, exiting.  Review sysdig-cli-output above for clues.")
 	}
 
 	if _, err := os.Stat("main.db"); os.IsNotExist(err) {
@@ -1644,25 +1626,20 @@ func main() {
 		log.Printf("main:: Found main.db (the sysdig vulnerability database), continuing")
 	}
 
-	authCredentials, err := decodeConfigCredentials(yamlConfig, nil)
-	if err != nil {
-		log.Fatalf("main:: Could not decode yamlConfig credentials.  Error: %v", err)
-	}
+	decodeConfigCredentials(&yamlConfig)
 
-	oAuthToken, err := getAccessToken(&yamlConfig, authCredentials, nil)
+	oAuthToken, err := getAccessToken(&yamlConfig, nil)
 
 	if err != nil {
 		log.Fatalf("main:: Error getting OAuth token: %v", err)
 	}
 	log.Printf("main:: Obtained OAuth Token, expires in: %+v	", oAuthToken.ExpiryTime)
 
-	// Create Results directory
-	if err := os.MkdirAll("results", os.ModePerm); err != nil {
-		log.Fatalf("main:: Failed to create results directory: %v", err)
-	}
+	// Create working directory if set
+	createWorkingDirectory(&yamlConfig)
 
 	//Generate a list of running apps for all organizations and spaces
-	runningApps, err := generateRunningApps(&yamlConfig, oAuthToken, authCredentials)
+	runningApps, err := generateRunningApps(&yamlConfig, oAuthToken)
 
 	// Initialize a WaitGroup
 	var wg sync.WaitGroup
@@ -1695,23 +1672,27 @@ func main() {
 	log.Print("")
 	log.Print("")
 	log.Print("main:: Starting workers. Please wait... Execution results will be begin showing momentarily")
+
+	//Setup starting channel mechanism
+	startWorkers := make(chan struct{})
+
 	// Start a predefined number of workers
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1) // Increment the WaitGroup counter for each worker
-		go worker(i, workQueue, resultsChan, yamlConfig, &wg)
+		go worker(i, workQueue, startWorkers, resultsChan, yamlConfig, &wg)
 	}
+
+	close(startWorkers)
 	// Keep results for further post-processing
 	var executionResults []executionresults.WorkerResult
 
 	for i := 0; i < len(runningApps); i++ {
 		result := <-resultsChan
 		// Process result
-		//logEntries := strings.Join(result.Logs, "\n")
 		for _, line := range result.Logs {
 			log.Printf("%s", line)
 		}
 		// Log all entries to the command line
-		//log.Printf("main::Logs from %s.  %s", result.RunningApp.Name, logEntries)
 		log.Printf("main:: Thread: %d, Result from app %s: %v", i, result.RunningApp.Name, result.Success)
 		log.Print("")
 		executionResults = append(executionResults, result)
@@ -1729,5 +1710,7 @@ func main() {
 	}
 
 	log.Print("main:: Exit()")
-	log.Println("Finished...")
+	log.Println("main:: Finished...")
 }
+
+// TODO: add in more logging for extractAndWriteCSV:: App: , completion unsuccessful, skipping

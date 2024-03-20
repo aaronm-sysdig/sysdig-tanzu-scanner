@@ -12,6 +12,7 @@ type Config struct {
 		StandaloneSeverity     string `yaml:"standalone_severity"`
 		StandaloneHasFix       bool   `yaml:"standalone_hasfix"`
 		StandaloneDaysSinceFix int    `yaml:"standalone_days_since_fix"`
+		WorkingDirectory       string `yaml:"working_directory"`
 	} `yaml:"settings"`
 	Config struct {
 		CFAuthEndpoint    string `yaml:"cf_auth_endpoint"`
