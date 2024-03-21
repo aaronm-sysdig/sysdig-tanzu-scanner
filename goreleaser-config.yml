@@ -1,0 +1,14 @@
+project_name: sysdig-audit-vm-runtime
+    
+builds:
+  - id: "sysdig-tanzu-scanner"
+    main: ./sysdig-tanzu-scanner.go
+    binary: sysdig-tanzu-scanner
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X "main.VERSION={{.Env.NEW_VERSION}}"
