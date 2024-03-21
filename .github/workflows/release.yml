@@ -1,0 +1,51 @@
+name: GoReleaser
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '**'
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: '1.21.3'
+      - name: Check prior VERSION file
+        run: cat ./VERSION
+
+      - name: Increment version
+        run: |
+          chmod +x ./increment_version.sh
+          NEW_VERSION=$(./increment_version.sh)
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+
+      - name: Commit version increment
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add ./VERSION
+          git commit -m "Increment version to ${{ env.NEW_VERSION }}"
+          git tag ${{ env.NEW_VERSION }}
+          git push origin HEAD --tags
+
+      - name: Check updated VERSION file
+        run: cat ./VERSION
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v2
+        with:
+          version: latest
+          args: release --clean --config ./goreleaser-config.yml
+          workdir: ./
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_VERSION: ${{ env.NEW_VERSION }}  # Pass the NEW_VERSION to GoReleaser
