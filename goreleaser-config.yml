@@ -13,4 +13,4 @@ builds:
     env:
       - CGO_ENABLED=0
     ldflags:
-      - -s -w -X "main.VERSION={{.Env.NEW_VERSION}}"
+      - -s -w -X main.version={{.Version}}
