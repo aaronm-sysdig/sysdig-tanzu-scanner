@@ -5,7 +5,8 @@ import (
 )
 
 type WorkerResult struct {
-	Success                 bool
+	Result                  bool
+	ResultReason            string
 	Logs                    []string
 	ThreadID                int
 	OCIPath                 string
