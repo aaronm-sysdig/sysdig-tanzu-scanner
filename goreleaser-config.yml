@@ -1,4 +1,4 @@
-project_name: sysdig-audit-vm-runtime
+project_name: sysdig-tanzu-scanner
     
 builds:
   - id: "sysdig-tanzu-scanner"
