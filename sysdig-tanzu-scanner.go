@@ -1562,8 +1562,8 @@ func main() {
 	done := make(chan bool, 1)
 	// Register the signals you want to catch
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
-	log.Print("main:: Sysdig-Tanzu-Scanner v1.2.5-BW Enter()")
+	var VERSION = "1.0.0.0"
+	log.Printf("main:: Sysdig-Tanzu-Scanner v%s-BW Enter()",VERSION)
 
 	// Parse yaml config file
 	yamlConfig, err := parseConfigFile()
