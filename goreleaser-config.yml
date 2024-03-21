@@ -1,4 +1,4 @@
-project_name: sysdig-audit-vm-runtime
+project_name: sysdig-tanzu-scanner
     
 builds:
   - id: "sysdig-tanzu-scanner"
@@ -10,5 +10,7 @@ builds:
     goarch:
       - amd64
       - arm64
+    env:
+      - CGO_ENABLED=0
     ldflags:
       - -s -w -X "main.VERSION={{.Env.NEW_VERSION}}"
