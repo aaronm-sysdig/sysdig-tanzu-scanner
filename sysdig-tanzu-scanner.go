@@ -1579,6 +1579,8 @@ func createWorkingDirectory(yamlConfig *config.Config) {
 	log.Info("createWorkingDirectory:: Exit()")
 }
 
+var VERSION string
+
 func main() {
 	// Setting up signal catching
 	sigs := make(chan os.Signal, 1)
@@ -1586,8 +1588,7 @@ func main() {
 	done := make(chan bool, 1)
 	// Register the signals you want to catch
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	var version = "1.2.5"
-	log.Printf("main:: Sysdig-Tanzu-Scanner v%s-BW Enter()", version)
+	log.Printf("main:: Sysdig-Tanzu-Scanner v%s-BW Enter()", VERSION)
 
 	// Parse yaml config file
 	yamlConfig, err := parseConfigFile()
