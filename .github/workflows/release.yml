@@ -29,6 +29,11 @@ jobs:
           NEW_VERSION=$(./increment_version.sh)
           echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
 
+      - name: Echo NEW_VERSION variable
+        run: |
+          echo $NEW_VERSION
+
+      
       - name: Commit version increment
         run: |
           git config --local user.email "action@github.com"
