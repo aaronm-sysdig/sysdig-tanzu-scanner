@@ -26,7 +26,6 @@ jobs:
 
       - name: Increment version
         run: |
-          chmod +x ./increment_version.sh
           NEW_VERSION=$(./increment_version.sh)
           echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
 
