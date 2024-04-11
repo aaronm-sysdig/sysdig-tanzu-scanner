@@ -3,8 +3,8 @@ module sysdig-tanzu-scanner
 go 1.22.1
 
 require (
-	github.com/google/uuid v1.6.0
 	github.com/sirupsen/logrus v1.9.3
+	github.com/spf13/pflag v1.0.5
 	golang.org/x/text v0.14.0
 	gopkg.in/yaml.v2 v2.4.0
 )

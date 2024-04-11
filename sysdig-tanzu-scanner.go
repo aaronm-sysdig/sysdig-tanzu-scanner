@@ -8,9 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	log "github.com/sirupsen/logrus"
+	"github.com/spf13/pflag"
 	"golang.org/x/text/message"
 	"gopkg.in/yaml.v2"
 	"io"
@@ -343,7 +343,6 @@ func getSpace(appName string, spaceURL string, oAuthToken *oauthtoken.OAuthToken
 }
 
 func getDeployedRevision(appName string, deployedRevisionURL string, oAuthToken *oauthtoken.OAuthToken, workerResult *executionresults.WorkerResult) (intDeployedRevisionVersion int64, err error) {
-
 	workerResult.Logs = append(workerResult.Logs, "getDeployedRevision:: Enter()")
 
 	configDeployedRevision := sysdighttp.DefaultSysdigRequestConfig()
@@ -358,7 +357,8 @@ func getDeployedRevision(appName string, deployedRevisionURL string, oAuthToken 
 	objDeployedRevisionResponse, err := sysdighttp.SysdigRequest(configDeployedRevision)
 	if err != nil {
 		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("getDeployedRevision:: Failed to exequte query to get deployed revision for %v.  Error: %v", appName, err))
-		workerResult.ResultReason = " Failed to exequte query to get deployed revision"
+		workerResult.ResultReason = " Failed to exequte query to get deployed revision, defaulting to 0 and continuing"
+		workerResult.DeployedRevisionVersion = 0
 		return 0, err
 	}
 	var jsonDeployedRevision deployedrevision.DeployedRevisionsResponse
@@ -830,6 +830,93 @@ func buildOCIDirectory(yamlConfig *config.Config, appResource runningapps.Resour
 	return dir
 }*/
 
+func executeAndLogWindowsScanner(appResource runningapps.Resource, yamlConfig *config.Config, organizationResource organizationpayload.OrganizationPayload, spaceResource spacepayload.SpacePayload, sysdigAPIToken string, workerResult *executionresults.WorkerResult) error {
+	_ = sysdigAPIToken
+	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("executeAndLogWindowsScanner:: Enter()"))
+	ociDirPath := fmt.Sprintf("%s/oci/%s/%s/%s/%s", yamlConfig.Settings.WorkingDirectory, organizationResource.Name, spaceResource.Name, appResource.GUID, appResource.Name)
+
+	// Append the OCI directory path to the arguments
+	filenameUUID := appResource.GUID
+	scanResultsPath := fmt.Sprintf("%s/scanResults", yamlConfig.Settings.WorkingDirectory)
+
+	_, err := os.Stat(scanResultsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			err := os.MkdirAll(scanResultsPath, os.ModePerm)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	scanResultsFilename := fmt.Sprintf("%s/%s.json", scanResultsPath, filenameUUID)
+	scanLogFilename := fmt.Sprintf("%s.log", scanResultsFilename)
+	workerResult.ScanResultsFilename = scanResultsFilename
+	workerResult.ScanResultsLogFilename = scanLogFilename
+
+	// Split the execution command string into arguments
+	var args []string
+	args = append(args, "./grype")
+	args = append(args, fmt.Sprintf("oci-dir:%s", ociDirPath))
+	args = append(args, "-o")
+	args = append(args, "json")
+	args = append(args, "--file")
+	args = append(args, scanResultsFilename)
+	args = append(args, "-c")
+	args = append(args, "grype.yaml")
+	args = append(args, "--by-cve")
+	args = append(args, "-v")
+
+	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("executeAndLogWindowsScanner:: Executing: %v", args))
+
+	// Assuming the first argument is the path to the executable
+	cmd := exec.Command(args[0], args[1:]...)
+
+	// Create a pipe to the standard err of the cmd
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("executeAndLogWindowsScanner:: Failed to create stdout pipe: %v", err))
+		return err
+	}
+
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("executeAndLogWindowsScanner:: Failed to start cmd: %v", err))
+		return err
+	}
+
+	// Use a scanner to read the command's stdout line by line
+	scanner := bufio.NewScanner(stderrPipe)
+	for scanner.Scan() {
+		workerResult.Logs = append(workerResult.Logs, scanner.Text())
+	}
+
+	// Wait for the command to finish
+	err = cmd.Wait()
+	if err != nil {
+		var exiterr *exec.ExitError
+		if errors.As(err, &exiterr) {
+			if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
+				exitCode := status.ExitStatus()
+				workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("executeAndLogWindowsScanner::Cmd exited with code: %d", exitCode))
+				if exitCode > 3 {
+					workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("executeAndLogWindowsScanner::Cmd finished with unacceptable error code: %v", exitCode))
+					return err
+				} else {
+					// Handle legitimate exit codes (0 and 1, and any code <= 3) gracefully
+					workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("executeAndLogWindowsScanner::Cmd finished with acceptable error code: %v. Continuing...", exitCode))
+				}
+			}
+		}
+	}
+	// Command executed successfully, exit code 0
+	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("executeAndLogWindowsScanner::Cmd executed successfully"))
+	// Set the JSON file in structure
+	workerResult.RunningApp.ResultsFilename = scanResultsFilename
+	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("executeAndLogWindowsScanner:: Exit()"))
+	return nil
+}
+
 func executeAndLogSysdigScanner(appResource runningapps.Resource, yamlConfig *config.Config, organizationResource organizationpayload.OrganizationPayload, spaceResource spacepayload.SpacePayload, sysdigAPIToken string, workerResult *executionresults.WorkerResult) error {
 
 	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("executeAndLogSysdigScanner:: Enter()"))
@@ -1213,9 +1300,8 @@ func init() {
 	//log.SetLevel(log.DebugLevel)
 }
 
-func processApp(appResource runningapps.Resource, yamlConfig config.Config, threadID int) (workerResult executionresults.WorkerResult, err error) {
-	workerResult.Logs = append(workerResult.Logs, "processApp:: Enter()")
-
+func processApp(workerNumber int, appResource runningapps.Resource, yamlConfig config.Config) (workerResult executionresults.WorkerResult, err error) {
+	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Enter() as Worker %d", workerNumber))
 	// Getting oAuthToken for thread
 	oAuthToken, err := getAccessToken(&yamlConfig, &workerResult)
 
@@ -1240,18 +1326,17 @@ func processApp(appResource runningapps.Resource, yamlConfig config.Config, thre
 	// Get organizatino information
 	jsonOrganization, err := getOrganization(appResource.Name, jsonSpace.Links["organization"].Href, oAuthToken, &workerResult)
 	if err != nil {
-		workerResult.ResultReason = "Failed to get 'deployed_revisions'"
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("processApp:: Failed to get 'deployed_revisions'"))
+		workerResult.ResultReason = "Failed to get 'organization'"
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("processApp:: Failed to get 'organization'"))
 		return workerResult, err
 	}
 
 	// Get deployed revision information
-
 	intDeployedRevisionVersion, err := getDeployedRevision(appResource.Name, appResource.Links["deployed_revisions"].Href, oAuthToken, &workerResult)
 	if err != nil {
 		workerResult.ResultReason = "Failed to get 'deployed_revisions'"
-		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("processApp:: Failed to get 'deployed_revisions'"))
-		return workerResult, err
+		workerResult.Logs = append(workerResult.Logs, fmt.Sprint("processApp:: Failed to get 'deployed_revisions', setting revision to 0"))
+		intDeployedRevisionVersion = 0
 	}
 
 	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Found spaceName: '%v', organizationName: '%v', Deployed Version: '%d' for AppName: '%v'", jsonSpace.Name, jsonOrganization.Name, intDeployedRevisionVersion, appResource.Name))
@@ -1295,14 +1380,20 @@ func processApp(appResource runningapps.Resource, yamlConfig config.Config, thre
 		return workerResult, err
 	}
 
-	// Execute Sysdig scanner
-	if err = executeAndLogSysdigScanner(appResource, &yamlConfig, *jsonOrganization, *jsonSpace, yamlConfig.Config.SysdigAPIToken, &workerResult); err != nil {
-		workerResult.ResultReason = "Failed to successfully execute Sysdig Scanner, check specifc output"
-		return workerResult, err
+	// Execute Sysdig-cli-scanner if linux of grype if windows
+	if strings.ToUpper(appResource.Lifecycle.Data.Stack) == "WINDOWS-NOT-IMPLEMENTED-YET" {
+		if err = executeAndLogWindowsScanner(appResource, &yamlConfig, *jsonOrganization, *jsonSpace, yamlConfig.Config.SysdigAPIToken, &workerResult); err != nil {
+			workerResult.ResultReason = "Failed to successfully execute Windows Scanner, check specifc output"
+			return workerResult, err
+		}
+	} else {
+		if err = executeAndLogSysdigScanner(appResource, &yamlConfig, *jsonOrganization, *jsonSpace, yamlConfig.Config.SysdigAPIToken, &workerResult); err != nil {
+			workerResult.ResultReason = "Failed to successfully execute Sysdig Scanner, check specifc output"
+			return workerResult, err
+		}
 	}
 
 	workerResult.Result = true
-	workerResult.ThreadID = threadID
 
 	// Always cleanup if required
 	defer func() {
@@ -1317,21 +1408,26 @@ func processApp(appResource runningapps.Resource, yamlConfig config.Config, thre
 			}
 		}
 	}()
-
+	workerResult.Logs = append(workerResult.Logs, fmt.Sprintf("processApp:: Exit() as Worker %d", workerNumber))
 	return workerResult, nil
 }
 
 func worker(id int, workQueue <-chan runningapps.Resource, startWorkers <-chan struct{}, resultsChan chan<- executionresults.WorkerResult, yamlConfig config.Config, wg *sync.WaitGroup) {
 	defer wg.Done()
 	<-startWorkers // Wait for the start signal
-	var result executionresults.WorkerResult
 	var err error
 	for app := range workQueue {
+		var result executionresults.WorkerResult
+		result.ThreadID = id
 		if app.State == "STARTED" {
-			result, err = processApp(app, yamlConfig, id)
-			if err != nil {
+			if result, err = processApp(id, app, yamlConfig); err != nil {
 				result.Logs = append(result.Logs, fmt.Sprintf("Worker '%d': Error processing app '%s'. Error: %v", id, app.Name, err))
 			}
+		} else {
+			// minimal processing for non-running app
+			result.RunningApp = app
+			result.Logs = append(result.Logs, fmt.Sprintf("Worker '%d': app '%s' status != STARTED, skipping", id, app.Name))
+			result.ResultReason = fmt.Sprintf("App '%s' not in STARTED state, skipped...", app.Name)
 		}
 		resultsChan <- result
 	}
@@ -1370,17 +1466,14 @@ func parseCommandLineParameters(yamlConfig *config.Config) {
 	var cfUsername string
 	var cfPassword string
 	var sysdigAPIToken string
-	flag.StringVar(&cfUsername, "u", "", "CF Username")
-	flag.StringVar(&cfUsername, "cf-username", "", "CF Username (long-form)")
+	pflag.StringVarP(&cfUsername, "cf-username", "u", "", "CF Username (long-form)")
 
-	flag.StringVar(&cfPassword, "p", "", "CF Password")
-	flag.StringVar(&cfPassword, "cf-password", "", "CF Password (long-form)")
+	pflag.StringVarP(&cfPassword, "cf-password", "p", "", "CF Password (long-form)")
 
-	flag.StringVar(&sysdigAPIToken, "a", "", "Sysdig API Token")
-	flag.StringVar(&sysdigAPIToken, "sysdig-api-token", "", "Sysdig API Token (long-form)")
+	pflag.StringVarP(&sysdigAPIToken, "sysdig-api-token", "a", "", "Sysdig API Token (long-form)")
 
 	// Parse the flags
-	flag.Parse()
+	pflag.Parse()
 
 	if cfUsername != "" {
 		yamlConfig.Config.CFUsername = cfUsername
@@ -1481,12 +1574,33 @@ func removeMainDB(yamlConfig *config.Config) (err error) {
 	return err
 }
 
+func getDirSize(path string) (int64, error) {
+	var size int64
+	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			size += info.Size()
+		}
+		return nil
+	})
+	return size, err
+}
+
 func downloadMainDB(yamlConfig *config.Config) (statusCode int, err error) {
 	log.Debug("downloadMainDB:: Enter()")
 
 	//Remove old scan-logs output, will continue anyway
 	if err = os.Remove("scan-logs"); err != nil {
 		log.Printf("downloadMainDB:: Failed to delete scan-logs file, continuing anyway. Error: %v", err)
+	}
+
+	if _, err := os.Stat("main.db"); err == nil {
+		if maindbSize, _ := getDirSize("main.db"); maindbSize < 52428800 {
+			log.Printf("downloadMainDB:: main.db exists BUT is only %d bytes, shoud be over 100mb.  Cannot continue", maindbSize)
+			log.Fatalf("downloadMainDB:: suggest you delete the main.db folder and let it re-download / copy in place")
+		}
 	}
 
 	if _, err := os.Stat("main.db"); os.IsNotExist(err) {
@@ -1523,7 +1637,6 @@ func downloadMainDB(yamlConfig *config.Config) (statusCode int, err error) {
 		if errors.As(err, &exiterr) {
 			if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
 				exitCode := status.ExitStatus()
-
 				// Output scan-logs if we are in debug mode
 				if yamlConfig.Settings.LogLevel == "DEBUG" {
 					file, err := os.Open("scan-logs")
@@ -1547,7 +1660,11 @@ func downloadMainDB(yamlConfig *config.Config) (statusCode int, err error) {
 					}
 
 				}
-				log.Printf("downloadMainDB:: Stub execution error code: %d (2 is good)", exitCode)
+				if exitCode == 2 {
+					log.Printf("downloadMainDB:: Stub execution error code: %d (2 is good)", exitCode)
+				} else if exitCode == 3 {
+					log.Fatalf("downloadMainDB:: Stub execution error code: %d, Failed to download main.db, cannot continue", exitCode)
+				}
 			}
 		}
 
@@ -1708,6 +1825,7 @@ func main() {
 	}
 
 	close(startWorkers)
+
 	// Keep results for further post-processing
 	var executionResults []executionresults.WorkerResult
 
@@ -1718,7 +1836,7 @@ func main() {
 			log.Printf("%s", line)
 		}
 		// Log all entries to the command line
-		log.Printf("main:: Thread: %d, Result from app %s: %v", i, executionResult.RunningApp.Name, executionResult.Result)
+		log.Printf("main:: Result No: %d/%d, Result from app %s: %v", i, len(runningApps), executionResult.RunningApp.Name, executionResult.Result)
 		log.Print("")
 		executionResults = append(executionResults, executionResult)
 	}
@@ -1737,5 +1855,3 @@ func main() {
 	log.Print("main:: Exit()")
 	log.Println("main:: Finished...")
 }
-
-// TODO: add in more logging for extractAndWriteCSV:: App: , completion unsuccessful, skipping
