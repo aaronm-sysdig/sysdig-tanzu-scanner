@@ -1758,7 +1758,7 @@ func main() {
 
 	// Wait for all workers to finish
 	wg.Wait()
-	// Signal that no more results will be sent - close results channel
+	// Signal that no more results will be sent - close results channel.
 	close(resultsChan)
 
 	// Process CSV
