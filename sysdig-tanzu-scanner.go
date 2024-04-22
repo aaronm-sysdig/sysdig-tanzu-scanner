@@ -951,7 +951,7 @@ func writeCSV(filename string, data *[][]string) (err error) {
 	}(file)
 
 	writer := csv.NewWriter(file)
-	writer.Comma = ',' // Specify delimiter if different from ','
+	writer.Comma = ','
 
 	for _, record := range *data {
 		// Process record to escape quotes or adjust fields as needed
@@ -993,7 +993,7 @@ func generateCSVDataOnline(yamlConfig *config.Config, result *ResultsJSON.ScanRe
 									strFixedVersion = vuln.FixedInVersion
 								}
 								csvData = append(csvData, []string{
-									fmt.Sprintf("%s/%s/%s", executionResult.RunningApp.Organization.Name, executionResult.RunningApp.Space.Name, executionResult.RunningApp.Name),
+									executionResult.RunningApp.Name,
 									fmt.Sprintf("%d", executionResult.DeployedRevisionVersion),
 									executionResult.DropletSHA256Hash,
 									vuln.Severity.Value,
@@ -1095,7 +1095,7 @@ func generateCSVDataStandalone(yamlConfig *config.Config, result *ResultsJSONOld
 			}
 
 			csvData = append(csvData, []string{
-				fmt.Sprintf("%s/%s/%s", executionResult.RunningApp.Organization.Name, executionResult.RunningApp.Space.Name, executionResult.RunningApp.Name),
+				executionResult.RunningApp.Name,
 				fmt.Sprintf("%d", executionResult.DeployedRevisionVersion),
 				executionResult.DropletSHA256Hash,
 				vuln.Severity.Label,
