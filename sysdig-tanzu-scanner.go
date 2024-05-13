@@ -982,7 +982,7 @@ func generateCSVDataOnline(yamlConfig *config.Config, result *ResultsJSON.ScanRe
 								// Generate a CVE link if possible
 								var cveLink string
 								if strings.HasPrefix(strings.ToUpper(vuln.Name), "CVE") {
-									cveLink = fmt.Sprintf("https: //nvd.nist.gov/vuln/detail/%s", vuln.Name)
+									cveLink = fmt.Sprintf("https://nvd.nist.gov/vuln/detail/%s", vuln.Name)
 								}
 
 								// Generate Suggested fix / fixed in version
@@ -1088,7 +1088,7 @@ func generateCSVDataStandalone(yamlConfig *config.Config, result *ResultsJSONOld
 				cveLink = vuln.Severity.SourceUrl
 			} else {
 				if vuln.CvssScore.SourceUrl == "" {
-					cveLink = fmt.Sprintf("https: //nvd.nist.gov/vuln/detail/%s", vuln.Name)
+					cveLink = fmt.Sprintf("https://nvd.nist.gov/vuln/detail/%s", vuln.Name)
 				} else {
 					cveLink = vuln.CvssScore.SourceUrl
 				}
